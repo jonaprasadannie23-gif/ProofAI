@@ -1,4 +1,5 @@
 import logging
+import re
 import traceback
 import pandas as pd
 import numpy as np
@@ -10,6 +11,12 @@ from core.local_fallback import run_local_fallback
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Month name lookup used by the date-ambiguity guard (index 0 = January).
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
 
 
 class DataAnalyst:
@@ -42,6 +49,72 @@ class DataAnalyst:
                 "answer": None,
                 "verification": "REFUSED",
                 "verification_detail": quality["refuse_reason"],
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Currency / unit mismatch guard ---
+        currency_check = self._check_currency_mismatch(df, question)
+        if currency_check["refuse"]:
+            logger.info(
+                "analysis_mode=refused reason=currency_mismatch question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": currency_check["refuse_reason"],
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Date ambiguity guard ---
+        date_refusal = self._check_date_ambiguity(question, df)
+        if date_refusal is not None:
+            logger.info(
+                "analysis_mode=refused reason=date_ambiguity question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": date_refusal,
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Missing-field guard ---
+        missing_field_refusal = self._check_unanswerable_question(question, df)
+        if missing_field_refusal is not None:
+            logger.info(
+                "analysis_mode=refused reason=missing_field question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": missing_field_refusal,
                 "generated_code": None,
                 "dataset_summary": self._dataset_summary(df, filename),
                 "data_quality": self._data_quality_report(df),
@@ -201,6 +274,240 @@ class DataAnalyst:
             }
 
     # ── Data quality ──────────────────────────────────────────────────────────
+
+    def _check_unanswerable_question(
+        self, question: str, df: pd.DataFrame
+    ) -> str | None:
+        """
+        Refuse questions that ask for a business metric that has no
+        corresponding (or derivable) column in the dataset.
+
+        Design rules
+        ────────────
+        • Each METRIC entry defines:
+            - ask_kws   : words that indicate the user is asking FOR this metric
+            - field_kws : words that, if present in any column name, satisfy the
+                          metric (i.e. the dataset CAN answer it)
+        • A metric is "absent" when the question triggers ask_kws AND no
+          column name contains any of its field_kws.
+        • Broad columns like "amount", "total", "value", "price", "qty",
+          "quantity", "cost", "sales", "number", "count" are recognised as
+          generic satisfiers that make most aggregation questions answerable,
+          so they are included in field_kws for every metric that could
+          reasonably be derived from such a column.
+        • The guard is deliberately conservative: when in doubt it does NOT
+          refuse, so a valid question is never blocked.
+        """
+        # ── Metric catalogue ─────────────────────────────────────────────────
+        # Each entry: (concept_label, ask_keywords, field_keywords)
+        # field_keywords are checked (case-insensitively) against column names.
+        METRICS: list[tuple[str, frozenset[str], frozenset[str]]] = [
+            (
+                "revenue",
+                frozenset({"revenue"}),
+                frozenset({
+                    "revenue", "rev", "sales", "income", "turnover",
+                    "amount", "total", "value", "price",
+                }),
+            ),
+            (
+                "profit",
+                frozenset({"profit", "net income", "net profit", "earnings"}),
+                frozenset({
+                    "profit", "net", "earnings", "income", "margin",
+                    "gain", "pnl", "p&l",
+                }),
+            ),
+            (
+                "profit margin",
+                frozenset({"profit margin", "margin", "gross margin", "net margin"}),
+                frozenset({
+                    "margin", "profit", "net", "gross",
+                }),
+            ),
+            (
+                "discount",
+                frozenset({"discount", "discounted", "discount amount", "discount rate"}),
+                frozenset({
+                    "discount", "rebate", "reduction", "off", "promo",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "tax",
+                frozenset({"tax", "taxes", "tax amount", "vat", "gst", "tax rate"}),
+                frozenset({
+                    "tax", "vat", "gst", "levy", "duty",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "cost",
+                frozenset({"cost", "costs", "total cost", "unit cost", "cost of goods"}),
+                frozenset({
+                    "cost", "expense", "cogs", "price", "spend",
+                    "amount", "value", "total",
+                }),
+            ),
+            (
+                "salary",
+                frozenset({"salary", "salaries", "wage", "wages", "pay", "compensation"}),
+                frozenset({
+                    "salary", "wage", "pay", "compensation", "ctc",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "budget",
+                frozenset({"budget", "budgeted", "budget amount", "planned spend"}),
+                frozenset({
+                    "budget", "plan", "target", "forecast",
+                    "amount", "value",
+                }),
+            ),
+        ]
+
+        q_lower = question.lower()
+        col_names_lower = {col.lower() for col in df.columns}
+
+        for concept, ask_kws, field_kws in METRICS:
+            # 1. Does the question ask for this metric?
+            if not any(kw in q_lower for kw in ask_kws):
+                continue
+
+            # 2. Does any column name satisfy the metric?
+            if any(fkw in col_name for col_name in col_names_lower for fkw in field_kws):
+                continue
+
+            # 3. Metric asked for, no matching column → refuse
+            col_list = ", ".join(df.columns)
+            return (
+                f"Cannot determine '{concept}' because the dataset does not contain "
+                f"a {concept} column or an equivalent field. "
+                f"Available columns: {col_list}."
+            )
+
+        return None
+
+    def _check_date_ambiguity(
+        self, question: str, df: pd.DataFrame
+    ) -> str | None:
+        """
+        Detect slash-form dates in the question that are ambiguous between
+        DD/MM/YYYY and MM/DD/YYYY interpretations.
+
+        A date X/Y/YYYY is ambiguous when both X <= 12 and Y <= 12, so either
+        field could be the month.  Unambiguous examples:
+          13/04/2026  — X=13 cannot be a month → not ambiguous
+          04/13/2026  — Y=13 cannot be a month → not ambiguous
+          2026-04-03  — ISO format, not matched → not ambiguous
+
+        Only fires when the question also contains date-related intent keywords,
+        so purely numeric questions (e.g. "ratio 3/4 of total") are unaffected.
+
+        Returns a refusal message string, or None if no ambiguity is found.
+        """
+        # ── 1. Gate on date-related question intent ───────────────────────────
+        DATE_INTENT_KEYWORDS = {
+            "date", "day", "month", "year",
+            "before", "after", "between", "on ",
+            "orders placed", "transactions made", "records from",
+            "placed on", "made on", "from ", "since ", "until ",
+            "weekly", "monthly", "daily", "yearly",
+        }
+        q_lower = question.lower()
+        if not any(kw in q_lower for kw in DATE_INTENT_KEYWORDS):
+            return None
+
+        # ── 2. Find all slash-form dates in the question ──────────────────────
+        # Matches:  D/M/YYYY  DD/MM/YYYY  M/D/YYYY  MM/DD/YYYY
+        # Does NOT match ISO (YYYY-MM-DD) — those are unambiguous.
+        SLASH_DATE_RE = re.compile(
+            r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"
+        )
+
+        for match in SLASH_DATE_RE.finditer(question):
+            left = int(match.group(1))
+            right = int(match.group(2))
+            year = match.group(3)
+            raw = match.group(0)
+
+            # Unambiguous: one of the parts cannot be a valid month (1–12)
+            left_is_month = 1 <= left <= 12
+            right_is_month = 1 <= right <= 12
+
+            if left_is_month and right_is_month:
+                # Both interpretations are valid → ambiguous
+                return (
+                    f"Cannot determine reliably because the date '{raw}' is ambiguous. "
+                    f"It could mean {left} {_MONTH_NAMES[right - 1]} {year} (DD/MM/YYYY) "
+                    f"or {right} {_MONTH_NAMES[left - 1]} {year} (MM/DD/YYYY). "
+                    f"Please specify the date format."
+                )
+            # Otherwise at least one part > 12, so the format is unambiguous.
+
+        return None
+
+    def _check_currency_mismatch(self, df: pd.DataFrame, question: str) -> dict:
+        """
+        Deterministically detect currency/unit mismatch before calling the LLM.
+
+        If the dataframe contains a currency or unit column with more than one
+        distinct value AND the question asks for a numeric aggregation, refuse
+        rather than letting the LLM silently filter to one currency.
+        """
+        # ── 1. Find currency/unit columns ────────────────────────────────────
+        CURRENCY_COL_KEYWORDS = {"currency", "curr", "ccy", "unit", "units", "uom"}
+        currency_cols = [
+            col for col in df.columns
+            if any(kw in col.lower() for kw in CURRENCY_COL_KEYWORDS)
+            and pd.api.types.is_string_dtype(df[col])
+        ]
+
+        if not currency_cols:
+            return {"refuse": False}
+
+        # ── 2. Check if any currency column has multiple distinct values ──────
+        mismatched: list[tuple[str, list[str]]] = []
+        for col in currency_cols:
+            distinct = sorted(df[col].dropna().unique().tolist())
+            if len(distinct) > 1:
+                mismatched.append((col, [str(v) for v in distinct]))
+
+        if not mismatched:
+            return {"refuse": False}
+
+        # ── 3. Check if the question asks for a numeric aggregation ──────────
+        NUMERIC_QUESTION_KEYWORDS = {
+            "total", "sum", "average", "mean", "avg",
+            "maximum", "minimum", "max", "min",
+            "highest", "lowest", "largest", "smallest",
+            "how much", "compare", "difference", "ratio",
+            "revenue", "sales", "amount", "value", "cost", "price",
+            "calculate", "computation", "aggregate",
+        }
+        q_lower = question.lower()
+        asks_numeric = any(kw in q_lower for kw in NUMERIC_QUESTION_KEYWORDS)
+
+        if not asks_numeric:
+            return {"refuse": False}
+
+        # ── 4. Build the refusal message listing the mismatched currencies ───
+        details = "; ".join(
+            f"'{col}' contains {', '.join(vals)}"
+            for col, vals in mismatched
+        )
+        # Flat list of currency values for the message
+        all_currencies = ", ".join(
+            val for _, vals in mismatched for val in vals
+        )
+        refuse_reason = (
+            f"Cannot determine reliably because the dataset contains multiple "
+            f"currencies: {all_currencies}. "
+            f"A currency conversion rule is required before calculating this value."
+        )
+        logger.info("currency_mismatch detected: %s", details)
+        return {"refuse": True, "refuse_reason": refuse_reason}
 
     def _check_data_quality(self, df: pd.DataFrame) -> dict:
         warnings = []
