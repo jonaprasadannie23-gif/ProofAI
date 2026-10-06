@@ -923,6 +923,16 @@ body, #root {
   border-top: 1px solid var(--border);
 }
 
+.proof-desc {
+  margin: 0;
+  padding: 12px 20px;
+  background: rgba(147, 197, 253, 0.05);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
 .code-toolbar {
   display: flex;
   align-items: center;

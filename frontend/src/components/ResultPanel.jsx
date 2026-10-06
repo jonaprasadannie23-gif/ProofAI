@@ -62,7 +62,9 @@ export function AnalyzingResult() {
 export default function ResultPanel({ result, settings, onFollowUp }) {
   const [codeOpen, setCodeOpen]         = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [proofOpen, setProofOpen]       = useState(false);
   const [copied, setCopied]             = useState(false);
+  const [proofCopied, setProofCopied]   = useState(false);
 
   const badge = BADGE[result.status] ?? BADGE.error;
 
@@ -75,6 +77,14 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
     navigator.clipboard.writeText(result.generated_code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const copyProof = () => {
+    if (!result.reproducible_proof) return;
+    navigator.clipboard.writeText(result.reproducible_proof).then(() => {
+      setProofCopied(true);
+      setTimeout(() => setProofCopied(false), 2000);
     });
   };
 
@@ -198,6 +208,45 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Reproducible proof ── */}
+        {result.reproducible_proof && (
+          <div className="code-section">
+            <button
+              className="section-toggle"
+              onClick={() => setProofOpen(!proofOpen)}
+              aria-expanded={proofOpen}
+              aria-controls="proof-block"
+            >
+              <span className="section-toggle-left">
+                <CodeIcon />
+                Reproducible Proof
+              </span>
+              <span className="toggle-chevron" aria-hidden="true">
+                {proofOpen ? "▲" : "▼"}
+              </span>
+            </button>
+
+            {proofOpen && (
+              <div className="code-body" id="proof-block">
+                <p className="proof-desc">
+                  Run this complete Python script with the uploaded dataset to reproduce the result independently.
+                </p>
+                <div className="code-toolbar">
+                  <span className="code-lang">python</span>
+                  <button
+                    className={`copy-btn${proofCopied ? " copied" : ""}`}
+                    onClick={copyProof}
+                    aria-label="Copy reproducible proof to clipboard"
+                  >
+                    {proofCopied ? "Copied ✓" : "Copy Code"}
+                  </button>
+                </div>
+                <pre className="code-pre" tabIndex={0}>{result.reproducible_proof}</pre>
               </div>
             )}
           </div>
