@@ -1,4 +1,6 @@
 import { useState } from "react";
+import VerificationPanel from "./VerificationPanel";
+import DataQualityPanel from "./DataQualityPanel";
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 function CodeIcon() {
@@ -21,9 +23,9 @@ function DbIcon() {
 }
 
 const BADGE = {
-  success: { cls: "verified", label: "Verified",     dot: true },
-  refused: { cls: "refused",  label: "Needs Review", dot: true },
-  error:   { cls: "failed",   label: "Failed",       dot: true },
+  success: { cls: "verified", label: "Verified",            dot: true },
+  refused: { cls: "refused",  label: "Unable to Answer",    dot: true },
+  error:   { cls: "failed",   label: "Failed",              dot: true },
 };
 
 /* ── Idle / analyzing states ─────────────────────────────────── */
@@ -57,12 +59,16 @@ export function AnalyzingResult() {
 }
 
 /* ── Main result ─────────────────────────────────────────────── */
-export default function ResultPanel({ result }) {
-  const [codeOpen, setCodeOpen] = useState(true);
+export default function ResultPanel({ result, settings, onFollowUp }) {
+  const [codeOpen, setCodeOpen]         = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied]             = useState(false);
 
   const badge = BADGE[result.status] ?? BADGE.error;
+
+  const showVerification = settings?.showVerificationPanel !== false;
+  const showCode         = settings?.showGeneratedCode !== false;
+  const showQuality      = settings?.showDataQuality !== false;
 
   const copyCode = () => {
     if (!result.generated_code) return;
@@ -75,125 +81,146 @@ export default function ResultPanel({ result }) {
   const ds = result.dataset_summary;
 
   return (
-    <div className="card result-card" role="region" aria-label="Analysis result">
+    <div className="result-stack">
+      {/* ── Main answer card ── */}
+      <div className="card result-card" role="region" aria-label="Analysis result">
 
-      {/* ── Answer section ── */}
-      <div className="answer-section">
-        <div className="answer-top">
-          <span className="answer-heading">Answer</span>
-          <span className={`v-badge ${badge.cls}`} role="status" aria-label={`Status: ${badge.label}`}>
-            {badge.dot && <span className="v-dot" aria-hidden="true" />}
-            {badge.label}
-          </span>
-        </div>
-
-        {result.answer ? (
-          <>
-            <p className={`answer-text${result.status !== "success" ? " refused" : ""}`}>
-              {result.answer}
-            </p>
-            <p className="answer-detail">{result.verification_detail}</p>
-          </>
-        ) : (
-          <p className="answer-text refused">{result.verification_detail}</p>
-        )}
-      </div>
-
-      {/* ── Warnings ── */}
-      {result.warnings?.length > 0 && (
-        <div className="warnings-section" role="alert">
-          <p className="warnings-label">
-            ⚠ Data warnings
-          </p>
-          {result.warnings.map((w, i) => (
-            <p key={i} className="warning-item">· {w}</p>
-          ))}
-        </div>
-      )}
-
-      {/* ── Generated code ── */}
-      {result.generated_code && (
-        <div className="code-section">
-          <button
-            className="section-toggle"
-            onClick={() => setCodeOpen(!codeOpen)}
-            aria-expanded={codeOpen}
-            aria-controls="code-block"
-          >
-            <span className="section-toggle-left">
-              <CodeIcon />
-              Generated Python Code
+        {/* ── Answer section ── */}
+        <div className="answer-section">
+          <div className="answer-top">
+            <span className="answer-heading">Answer</span>
+            <span className={`v-badge ${badge.cls}`} role="status" aria-label={`Status: ${badge.label}`}>
+              {badge.dot && <span className="v-dot" aria-hidden="true" />}
+              {badge.label}
             </span>
-            <span className="toggle-chevron" aria-hidden="true">
-              {codeOpen ? "▲" : "▼"}
-            </span>
-          </button>
+          </div>
 
-          {codeOpen && (
-            <div className="code-body" id="code-block">
-              <div className="code-toolbar">
-                <span className="code-lang">python</span>
-                <button
-                  className={`copy-btn${copied ? " copied" : ""}`}
-                  onClick={copyCode}
-                  aria-label="Copy code to clipboard"
-                >
-                  {copied ? "Copied ✓" : "Copy"}
-                </button>
-              </div>
-              <pre className="code-pre" tabIndex={0}>{result.generated_code}</pre>
-            </div>
+          {result.answer ? (
+            <>
+              <p className={`answer-text${result.status !== "success" ? " refused" : ""}`}>
+                {result.answer}
+              </p>
+              <p className="answer-detail">{result.verification_detail}</p>
+            </>
+          ) : (
+            <p className="answer-text refused">{result.verification_detail}</p>
           )}
         </div>
-      )}
 
-      {/* ── Evidence / dataset details ── */}
-      {ds && (
-        <div className="evidence-section">
-          <button
-            className="section-toggle"
-            style={{ padding: "0 0 12px 0" }}
-            onClick={() => setEvidenceOpen(!evidenceOpen)}
-            aria-expanded={evidenceOpen}
-            aria-controls="evidence-block"
-          >
-            <span className="section-toggle-left">
-              <DbIcon />
-              Dataset Evidence
-            </span>
-            <span className="toggle-chevron" aria-hidden="true">
-              {evidenceOpen ? "▲" : "▼"}
-            </span>
-          </button>
+        {/* ── Warnings ── */}
+        {result.warnings?.length > 0 && (
+          <div className="warnings-section" role="alert">
+            <p className="warnings-label">⚠ Data warnings</p>
+            {result.warnings.map((w, i) => (
+              <p key={i} className="warning-item">· {w}</p>
+            ))}
+          </div>
+        )}
 
-          {evidenceOpen && (
-            <div id="evidence-block">
-              <div className="evidence-grid">
-                <div className="evidence-item">
-                  <p className="evidence-key">File</p>
-                  <p className="evidence-val mono">{ds.filename}</p>
+        {/* ── Generated code ── */}
+        {showCode && result.generated_code && (
+          <div className="code-section">
+            <button
+              className="section-toggle"
+              onClick={() => setCodeOpen(!codeOpen)}
+              aria-expanded={codeOpen}
+              aria-controls="code-block"
+            >
+              <span className="section-toggle-left">
+                <CodeIcon />
+                Generated Python Code
+              </span>
+              <span className="toggle-chevron" aria-hidden="true">
+                {codeOpen ? "▲" : "▼"}
+              </span>
+            </button>
+
+            {codeOpen && (
+              <div className="code-body" id="code-block">
+                <div className="code-toolbar">
+                  <span className="code-lang">python</span>
+                  <button
+                    className={`copy-btn${copied ? " copied" : ""}`}
+                    onClick={copyCode}
+                    aria-label="Copy code to clipboard"
+                  >
+                    {copied ? "Copied ✓" : "Copy"}
+                  </button>
                 </div>
-                <div className="evidence-item">
-                  <p className="evidence-key">Shape</p>
-                  <p className="evidence-val">
-                    {ds.rows.toLocaleString()} rows × {ds.columns.length} cols
-                  </p>
-                </div>
-                <div className="evidence-item" style={{ gridColumn: "1 / -1" }}>
-                  <p className="evidence-key">Columns</p>
-                  <p className="evidence-val">{ds.columns.join(", ")}</p>
-                </div>
-                <div className="evidence-item" style={{ gridColumn: "1 / -1" }}>
-                  <p className="evidence-key">Types</p>
-                  <div className="dtype-tags">
-                    {Object.entries(ds.dtypes).map(([col, dtype]) => (
-                      <span key={col} className="dtype-tag">{col}: {dtype}</span>
-                    ))}
+                <pre className="code-pre" tabIndex={0}>{result.generated_code}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Dataset evidence ── */}
+        {ds && (
+          <div className="evidence-section">
+            <button
+              className="section-toggle"
+              style={{ padding: "0 0 12px 0" }}
+              onClick={() => setEvidenceOpen(!evidenceOpen)}
+              aria-expanded={evidenceOpen}
+              aria-controls="evidence-block"
+            >
+              <span className="section-toggle-left">
+                <DbIcon />
+                Dataset Evidence
+              </span>
+              <span className="toggle-chevron" aria-hidden="true">
+                {evidenceOpen ? "▲" : "▼"}
+              </span>
+            </button>
+
+            {evidenceOpen && (
+              <div id="evidence-block">
+                <div className="evidence-grid">
+                  <div className="evidence-item">
+                    <p className="evidence-key">File</p>
+                    <p className="evidence-val mono">{ds.filename}</p>
+                  </div>
+                  <div className="evidence-item">
+                    <p className="evidence-key">Shape</p>
+                    <p className="evidence-val">
+                      {ds.rows?.toLocaleString()} rows × {ds.columns?.length} cols
+                    </p>
+                  </div>
+                  <div className="evidence-item" style={{ gridColumn: "1 / -1" }}>
+                    <p className="evidence-key">Columns</p>
+                    <p className="evidence-val">{ds.columns?.join(", ")}</p>
+                  </div>
+                  <div className="evidence-item" style={{ gridColumn: "1 / -1" }}>
+                    <p className="evidence-key">Types</p>
+                    <div className="dtype-tags">
+                      {ds.dtypes && Object.entries(ds.dtypes).map(([col, dtype]) => (
+                        <span key={col} className="dtype-tag">{col}: {dtype}</span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Verification panel ── */}
+      {showVerification && (
+        <VerificationPanel result={result} />
+      )}
+
+      {/* ── Data quality panel ── */}
+      {showQuality && result.data_quality && (
+        <DataQualityPanel dataQuality={result.data_quality} />
+      )}
+
+      {/* ── Follow-up prompt ── */}
+      {result.status === "success" && onFollowUp && (
+        <div className="followup-prompt">
+          <span className="followup-label">Have a follow-up question?</span>
+          <button className="followup-btn" onClick={onFollowUp}>
+            Ask a follow-up →
+          </button>
         </div>
       )}
     </div>
