@@ -291,11 +291,19 @@ async def _groq_generate_suggestions(df: pd.DataFrame, filename: str) -> list[st
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GEMINI PROVIDER  (legacy — kept for rollback, not active by default)
+# GENERIC RETRY IMPLEMENTATION  (used by tests and Gemini provider)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _gemini_call_with_retry(coro_factory) -> object:
-    """Bounded retry for Gemini SDK errors (503 ServerError, 429 ClientError)."""
+async def _call_with_retry(coro_factory) -> object:
+    """
+    Bounded retry for Gemini SDK errors (503 ServerError, 429 ClientError).
+    
+    This is the generic retry implementation used in tests.
+    For a callable that raises google.genai.errors (ServerError, ClientError),
+    retries on codes in _RETRYABLE_SERVER_CODES (503) and _RETRYABLE_CLIENT_CODES (429).
+    Propagates non-retryable errors (401, 403, 404, 500) immediately.
+    Raises GeminiUnavailableError when retries are exhausted.
+    """
     from google.genai import errors as genai_errors
 
     last_exc: Exception | None = None
@@ -308,18 +316,26 @@ async def _gemini_call_with_retry(coro_factory) -> object:
         except genai_errors.ServerError as exc:
             if exc.code in _RETRYABLE_SERVER_CODES:
                 last_exc = exc
+                logger.debug(f"Retryable server error (attempt {attempt}): {exc.code}")
             else:
+                # Non-retryable server error (e.g., 500, 404)
                 raise
         except genai_errors.ClientError as exc:
             if exc.code in _RETRYABLE_CLIENT_CODES:
                 last_exc = exc
+                logger.debug(f"Retryable client error (attempt {attempt}): {exc.code}")
             else:
+                # Non-retryable client error (e.g., 401, 403, 400)
                 raise
 
     raise GeminiUnavailableError(
         f"Gemini API is temporarily unavailable (last error: {last_exc}). "
         f"Tried {len(_RETRY_DELAYS) + 1} times with exponential backoff."
     ) from last_exc
+
+
+# Alias for backward-compatibility with existing code
+_gemini_call_with_retry = _call_with_retry
 
 
 async def _gemini_generate_code(
