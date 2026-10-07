@@ -203,9 +203,20 @@ def _parse_pdf(contents: bytes, filename: str) -> dict:
                 header = [str(c) if c else f"col_{i}" for i, c in enumerate(best[0])]
                 rows = [[str(c) if c is not None else "" for c in row] for row in best[1:]]
                 df = pd.DataFrame(rows, columns=header)
-                # Try numeric conversion
+                # Try numeric conversion — only replace a column when every
+                # existing non-null value converts successfully.  This preserves
+                # text columns such as "Region" (South/North) and currency
+                # strings like "INR 184,000" that would become NaN with
+                # errors="coerce" on a mixed/text column.
+                # Compatible with pandas ≥ 3.0 (errors="ignore" was removed).
                 for col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="ignore")
+                    converted = pd.to_numeric(df[col], errors="coerce")
+                    original_non_null = df[col].notna().sum()
+                    converted_non_null = converted.notna().sum()
+                    if converted_non_null == original_non_null:
+                        # All non-null values survived → safe to use numeric
+                        df[col] = converted
+                    # Otherwise keep the original column unchanged
                 return _tabular_result(df, filename, "pdf")
 
         # Fall back to text
