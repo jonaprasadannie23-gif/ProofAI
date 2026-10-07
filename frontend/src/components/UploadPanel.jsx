@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import axios from "axios";
 
+const ACCEPTED_EXTENSIONS = ".csv,.xlsx,.xls,.json,.html,.htm,.txt,.pdf";
+
 /* ── SVG icons ──────────────────────────────────────────────── */
 function UploadIcon() {
   return (
@@ -39,18 +41,18 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
 
   const uploadFile = async (file) => {
     if (!file) return;
-    if (!file.name.endsWith(".csv")) {
-      setError("Only CSV files are supported.");
-      return;
-    }
     setError(null);
     setLoading(true);
     const form = new FormData();
     form.append("file", file);
     try {
       const res = await axios.post("/api/upload", form);
-      // Store the raw File object alongside server metadata so /analyze can resend it
-      onUpload({ ...res.data, fileObject: file });
+      onUpload({
+        ...res.data,
+        fileObject: file,
+        size: file.size,
+        uploadDate: new Date().toISOString(),
+      });
     } catch (e) {
       setError(e.response?.data?.detail || "Upload failed. Is the backend running?");
     } finally {
@@ -69,6 +71,11 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
     onClear();
   };
 
+  // For backward compat: check if we have tabular data fields
+  const rows     = dataset?.row_count ?? dataset?.rows ?? 0;
+  const cols     = dataset?.col_count ?? dataset?.columns?.length ?? 0;
+  const fileType = dataset?.file_type ?? "file";
+
   return (
     <div className="card" role="region" aria-label="Dataset upload">
       <p className="card-label">Dataset</p>
@@ -84,13 +91,13 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
             onDrop={handleDrop}
             role="button"
             tabIndex={0}
-            aria-label="Upload CSV file"
+            aria-label="Upload a data file"
             onKeyDown={(e) => e.key === "Enter" && inputRef.current.click()}
           >
             <input
               ref={inputRef}
               type="file"
-              accept=".csv"
+              accept={ACCEPTED_EXTENSIONS}
               style={{ display: "none" }}
               onChange={(e) => uploadFile(e.target.files[0])}
             />
@@ -105,9 +112,12 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
                 <div className="dropzone-upload-icon">
                   <UploadIcon />
                 </div>
-                <p className="dropzone-primary">Drop your CSV here</p>
+                <p className="dropzone-primary">Drop your file here</p>
                 <p className="dropzone-secondary">
                   or <span>click to browse</span>
+                </p>
+                <p className="dropzone-formats">
+                  CSV · Excel · JSON · HTML · TXT · PDF
                 </p>
               </>
             )}
@@ -129,7 +139,15 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
             <div className="file-pill-info">
               <div className="file-pill-name">{dataset.filename}</div>
               <div className="file-pill-meta">
-                {dataset.rows.toLocaleString()} rows · {dataset.columns.length} columns
+                {dataset.is_tabular === false ? (
+                  <span className="file-pill-type">{fileType.toUpperCase()} · Non-tabular</span>
+                ) : (
+                  <>
+                    <span className="file-pill-type">{fileType.toUpperCase()}</span>
+                    {" · "}
+                    {rows.toLocaleString()} rows · {cols} columns
+                  </>
+                )}
               </div>
             </div>
             <button
@@ -141,17 +159,26 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
             </button>
           </div>
 
-          {/* Stats */}
-          <div className="data-stats">
-            <div className="stat-item">
-              <div className="stat-value">{dataset.rows.toLocaleString()}</div>
-              <div className="stat-label">Rows</div>
+          {/* Stats — only for tabular data */}
+          {dataset.is_tabular !== false && (
+            <div className="data-stats">
+              <div className="stat-item">
+                <div className="stat-value">{rows.toLocaleString()}</div>
+                <div className="stat-label">Rows</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-value">{cols}</div>
+                <div className="stat-label">Columns</div>
+              </div>
             </div>
-            <div className="stat-item">
-              <div className="stat-value">{dataset.columns.length}</div>
-              <div className="stat-label">Columns</div>
-            </div>
-          </div>
+          )}
+
+          {/* Non-tabular warning */}
+          {dataset.is_tabular === false && dataset.parse_error && (
+            <p className="inline-warn" role="note">
+              {dataset.parse_error}
+            </p>
+          )}
         </>
       )}
     </div>

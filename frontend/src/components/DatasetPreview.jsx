@@ -1,11 +1,42 @@
 import { useState } from "react";
 
-export default function DatasetPreview({ dataset }) {
+export default function DatasetPreview({ dataset, maxRows = 10 }) {
   const [expanded, setExpanded] = useState(false);
-  const { columns, preview, missing_values, dtypes } = dataset;
 
-  const hasNulls = Object.values(missing_values).some((v) => v > 0);
-  const rows = expanded ? preview : preview.slice(0, 5);
+  if (!dataset) return null;
+
+  // Handle non-tabular files (PDF, TXT, HTML without tables)
+  if (dataset.is_tabular === false) {
+    return (
+      <div className="card preview-card" role="region" aria-label="File preview">
+        <div className="preview-header">
+          <p className="card-label" style={{ marginBottom: 0 }}>Preview</p>
+          <span className="badge">
+            {(dataset.file_type || "file").toUpperCase()}
+          </span>
+        </div>
+        {dataset.parse_error && (
+          <p className="preview-non-tabular-note">{dataset.parse_error}</p>
+        )}
+        {dataset.text_content ? (
+          <pre className="preview-text-content">{dataset.text_content}</pre>
+        ) : (
+          <p className="preview-non-tabular-note">No preview available.</p>
+        )}
+      </div>
+    );
+  }
+
+  // Tabular preview (CSV, Excel, JSON, HTML with table)
+  // Support both old API format (columns, preview) and new (columns, preview)
+  const columns       = dataset.columns || [];
+  const preview       = dataset.preview || [];
+  const missing       = dataset.missing_values || {};
+  const dtypes        = dataset.dtypes || {};
+  const rows_total    = dataset.row_count ?? dataset.rows ?? preview.length;
+
+  const hasNulls = Object.values(missing).some((v) => v > 0);
+  const shownRows = expanded ? preview : preview.slice(0, maxRows);
 
   return (
     <div className="card preview-card" role="region" aria-label="Dataset preview">
@@ -13,6 +44,7 @@ export default function DatasetPreview({ dataset }) {
         <p className="card-label" style={{ marginBottom: 0 }}>Preview</p>
         <div className="badge-row">
           <span className="badge">{columns.length} cols</span>
+          <span className="badge">{rows_total.toLocaleString()} rows</span>
           {hasNulls && <span className="badge badge-warn">Missing values</span>}
         </div>
       </div>
@@ -24,16 +56,16 @@ export default function DatasetPreview({ dataset }) {
               {columns.map((col) => (
                 <th key={col} scope="col">
                   <div className="th-col">{col}</div>
-                  <div className="th-type">{dtypes[col]}</div>
-                  {missing_values[col] > 0 && (
-                    <div className="th-null">{missing_values[col]} null</div>
+                  {dtypes[col] && <div className="th-type">{dtypes[col]}</div>}
+                  {missing[col] > 0 && (
+                    <div className="th-null">{missing[col]} null</div>
                   )}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
+            {shownRows.map((row, i) => (
               <tr key={i}>
                 {columns.map((col) => (
                   <td key={col} title={row[col] != null ? String(row[col]) : "null"}>
@@ -50,9 +82,11 @@ export default function DatasetPreview({ dataset }) {
         </table>
       </div>
 
-      {preview.length > 5 && (
+      {preview.length > maxRows && (
         <button className="show-more-btn" onClick={() => setExpanded(!expanded)}>
-          {expanded ? "Show fewer rows" : `Show all ${preview.length} preview rows →`}
+          {expanded
+            ? "Show fewer rows"
+            : `Show all ${preview.length} preview rows →`}
         </button>
       )}
     </div>

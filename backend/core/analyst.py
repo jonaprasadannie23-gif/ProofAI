@@ -1,12 +1,22 @@
-import os
+import logging
+import re
 import traceback
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 from core.code_executor import execute_code
-from core.llm import generate_analysis_code
+from core.llm import generate_analysis_code, GeminiUnavailableError
+from core.local_fallback import run_local_fallback
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Month name lookup used by the date-ambiguity guard (index 0 = January).
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
 
 
 class DataAnalyst:
@@ -16,7 +26,13 @@ class DataAnalyst:
     verifies the result, and refuses when data is insufficient.
     """
 
-    async def analyze(self, question: str, df: pd.DataFrame, filename: str) -> dict:
+    async def analyze(
+        self,
+        question: str,
+        df: pd.DataFrame,
+        filename: str,
+        context_history: list | None = None,
+    ) -> dict:
         warnings = []
 
         # --- Data quality checks ---
@@ -24,6 +40,10 @@ class DataAnalyst:
         warnings.extend(quality["warnings"])
 
         if quality["refuse"]:
+            logger.info(
+                "analysis_mode=refused reason=data_quality question=%r file=%s",
+                question, filename,
+            )
             return {
                 "status": "refused",
                 "answer": None,
@@ -31,7 +51,78 @@ class DataAnalyst:
                 "verification_detail": quality["refuse_reason"],
                 "generated_code": None,
                 "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
                 "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Currency / unit mismatch guard ---
+        currency_check = self._check_currency_mismatch(df, question)
+        if currency_check["refuse"]:
+            logger.info(
+                "analysis_mode=refused reason=currency_mismatch question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": currency_check["refuse_reason"],
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Date ambiguity guard ---
+        date_refusal = self._check_date_ambiguity(question, df)
+        if date_refusal is not None:
+            logger.info(
+                "analysis_mode=refused reason=date_ambiguity question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": date_refusal,
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
+
+        # --- Missing-field guard ---
+        missing_field_refusal = self._check_unanswerable_question(question, df)
+        if missing_field_refusal is not None:
+            logger.info(
+                "analysis_mode=refused reason=missing_field question=%r file=%s",
+                question, filename,
+            )
+            return {
+                "status": "refused",
+                "answer": None,
+                "verification": "REFUSED",
+                "verification_detail": missing_field_refusal,
+                "generated_code": None,
+                "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
+                "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
             }
 
         # --- Generate code via LLM ---
@@ -40,8 +131,72 @@ class DataAnalyst:
                 question=question,
                 df=df,
                 filename=filename,
+                context_history=context_history or [],
             )
+            logger.info("analysis_mode=gemini question=%r file=%s", question, filename)
+
+        except GeminiUnavailableError as e:
+            # ── Local fallback path ───────────────────────────────────────────
+            # Gemini exhausted all retries due to 503/429. Attempt deterministic
+            # local analysis so a demo / live session is not blocked.
+            logger.warning(
+                "analysis_mode=local_fallback reason=%s question=%r file=%s",
+                e, question, filename,
+            )
+            fallback = run_local_fallback(question, df)
+
+            if fallback is not None:
+                return {
+                    "status": "success",
+                    "answer": fallback.answer,
+                    "verification": "VERIFIED",
+                    "verification_detail": (
+                        "Gemini temporarily unavailable. "
+                        "ProofAI used verified local analysis."
+                    ),
+                    "generated_code": fallback.generated_code,
+                    "reproducible_proof": self._build_reproducible_proof(fallback.generated_code, filename),
+                    "dataset_summary": self._dataset_summary(df, filename),
+                    "data_quality": self._data_quality_report(df),
+                    "warnings": warnings + [
+                        "Gemini temporarily unavailable — result produced by local fallback analyzer."
+                    ],
+                    "ai_answer": fallback.answer,
+                    "code_result": fallback.answer,
+                    "match": True,
+                    "analysis_mode": "local_fallback",
+                }
+            else:
+                # Question not handled by local fallback — safe refusal
+                logger.info(
+                    "analysis_mode=refused reason=fallback_no_match question=%r",
+                    question,
+                )
+                return {
+                    "status": "refused",
+                    "answer": None,
+                    "verification": "REFUSED",
+                    "verification_detail": (
+                        "Unable to verify this question automatically "
+                        "because the AI service is unavailable."
+                    ),
+                    "generated_code": None,
+                    "dataset_summary": self._dataset_summary(df, filename),
+                    "data_quality": self._data_quality_report(df),
+                    "warnings": warnings + [
+                        "Gemini temporarily unavailable — question requires AI analysis."
+                    ],
+                    "ai_answer": None,
+                    "code_result": None,
+                    "match": None,
+                    "analysis_mode": "refused",
+                }
+
         except Exception as e:
+            logger.error(
+                "analysis_mode=error reason=%s question=%r file=%s",
+                e, question, filename,
+            )
             return {
                 "status": "error",
                 "answer": None,
@@ -49,32 +204,314 @@ class DataAnalyst:
                 "verification_detail": f"Code generation failed: {str(e)}",
                 "generated_code": None,
                 "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
                 "warnings": warnings,
+                "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "error",
             }
 
         # --- Execute generated code ---
         exec_result = execute_code(generated_code, df)
 
         if exec_result["success"]:
+            output_str = str(exec_result["output"])
+
+            # Check for INSUFFICIENT_DATA signal from the LLM
+            if output_str.startswith("INSUFFICIENT_DATA:"):
+                reason = output_str.replace("INSUFFICIENT_DATA:", "").strip()
+                logger.info(
+                    "analysis_mode=refused reason=insufficient_data question=%r",
+                    question,
+                )
+                return {
+                    "status": "refused",
+                    "answer": None,
+                    "verification": "REFUSED",
+                    "verification_detail": f"Unable to answer reliably: {reason}",
+                    "generated_code": generated_code,
+                    "reproducible_proof": self._build_reproducible_proof(generated_code, filename),
+                    "dataset_summary": self._dataset_summary(df, filename),
+                    "data_quality": self._data_quality_report(df),
+                    "warnings": warnings,
+                    "ai_answer": reason,
+                    "code_result": output_str,
+                    "match": False,
+                    "analysis_mode": "gemini",
+                }
+
             return {
                 "status": "success",
-                "answer": str(exec_result["output"]),
+                "answer": output_str,
                 "verification": "VERIFIED",
-                "verification_detail": "Code executed successfully and produced a result.",
+                "verification_detail": "Answer produced by executing code against your data.",
                 "generated_code": generated_code,
+                "reproducible_proof": self._build_reproducible_proof(generated_code, filename),
                 "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
                 "warnings": warnings,
+                "ai_answer": output_str,
+                "code_result": output_str,
+                "match": True,
+                "analysis_mode": "gemini",
             }
         else:
+            logger.warning(
+                "analysis_mode=gemini exec_failed question=%r file=%s",
+                question, filename,
+            )
             return {
                 "status": "error",
                 "answer": None,
                 "verification": "FAILED",
                 "verification_detail": exec_result["error"],
                 "generated_code": generated_code,
+                "reproducible_proof": self._build_reproducible_proof(generated_code, filename),
                 "dataset_summary": self._dataset_summary(df, filename),
+                "data_quality": self._data_quality_report(df),
                 "warnings": warnings,
+                "ai_answer": None,
+                "code_result": exec_result["error"],
+                "match": False,
+                "analysis_mode": "gemini",
             }
+
+    # ── Data quality ──────────────────────────────────────────────────────────
+
+    def _check_unanswerable_question(
+        self, question: str, df: pd.DataFrame
+    ) -> str | None:
+        """
+        Refuse questions that ask for a business metric that has no
+        corresponding (or derivable) column in the dataset.
+
+        Design rules
+        ────────────
+        • Each METRIC entry defines:
+            - ask_kws   : words that indicate the user is asking FOR this metric
+            - field_kws : words that, if present in any column name, satisfy the
+                          metric (i.e. the dataset CAN answer it)
+        • A metric is "absent" when the question triggers ask_kws AND no
+          column name contains any of its field_kws.
+        • Broad columns like "amount", "total", "value", "price", "qty",
+          "quantity", "cost", "sales", "number", "count" are recognised as
+          generic satisfiers that make most aggregation questions answerable,
+          so they are included in field_kws for every metric that could
+          reasonably be derived from such a column.
+        • The guard is deliberately conservative: when in doubt it does NOT
+          refuse, so a valid question is never blocked.
+        """
+        # ── Metric catalogue ─────────────────────────────────────────────────
+        # Each entry: (concept_label, ask_keywords, field_keywords)
+        # field_keywords are checked (case-insensitively) against column names.
+        METRICS: list[tuple[str, frozenset[str], frozenset[str]]] = [
+            (
+                "revenue",
+                frozenset({"revenue"}),
+                frozenset({
+                    "revenue", "rev", "sales", "income", "turnover",
+                    "amount", "total", "value", "price",
+                }),
+            ),
+            (
+                "profit",
+                frozenset({"profit", "net income", "net profit", "earnings"}),
+                frozenset({
+                    "profit", "net", "earnings", "income", "margin",
+                    "gain", "pnl", "p&l",
+                }),
+            ),
+            (
+                "profit margin",
+                frozenset({"profit margin", "margin", "gross margin", "net margin"}),
+                frozenset({
+                    "margin", "profit", "net", "gross",
+                }),
+            ),
+            (
+                "discount",
+                frozenset({"discount", "discounted", "discount amount", "discount rate"}),
+                frozenset({
+                    "discount", "rebate", "reduction", "off", "promo",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "tax",
+                frozenset({"tax", "taxes", "tax amount", "vat", "gst", "tax rate"}),
+                frozenset({
+                    "tax", "vat", "gst", "levy", "duty",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "cost",
+                frozenset({"cost", "costs", "total cost", "unit cost", "cost of goods"}),
+                frozenset({
+                    "cost", "expense", "cogs", "price", "spend",
+                    "amount", "value", "total",
+                }),
+            ),
+            (
+                "salary",
+                frozenset({"salary", "salaries", "wage", "wages", "pay", "compensation"}),
+                frozenset({
+                    "salary", "wage", "pay", "compensation", "ctc",
+                    "amount", "value",
+                }),
+            ),
+            (
+                "budget",
+                frozenset({"budget", "budgeted", "budget amount", "planned spend"}),
+                frozenset({
+                    "budget", "plan", "target", "forecast",
+                    "amount", "value",
+                }),
+            ),
+        ]
+
+        q_lower = question.lower()
+        col_names_lower = {col.lower() for col in df.columns}
+
+        for concept, ask_kws, field_kws in METRICS:
+            # 1. Does the question ask for this metric?
+            if not any(kw in q_lower for kw in ask_kws):
+                continue
+
+            # 2. Does any column name satisfy the metric?
+            if any(fkw in col_name for col_name in col_names_lower for fkw in field_kws):
+                continue
+
+            # 3. Metric asked for, no matching column → refuse
+            col_list = ", ".join(df.columns)
+            return (
+                f"Cannot determine '{concept}' because the dataset does not contain "
+                f"a {concept} column or an equivalent field. "
+                f"Available columns: {col_list}."
+            )
+
+        return None
+
+    def _check_date_ambiguity(
+        self, question: str, df: pd.DataFrame
+    ) -> str | None:
+        """
+        Detect slash-form dates in the question that are ambiguous between
+        DD/MM/YYYY and MM/DD/YYYY interpretations.
+
+        A date X/Y/YYYY is ambiguous when both X <= 12 and Y <= 12, so either
+        field could be the month.  Unambiguous examples:
+          13/04/2026  — X=13 cannot be a month → not ambiguous
+          04/13/2026  — Y=13 cannot be a month → not ambiguous
+          2026-04-03  — ISO format, not matched → not ambiguous
+
+        Only fires when the question also contains date-related intent keywords,
+        so purely numeric questions (e.g. "ratio 3/4 of total") are unaffected.
+
+        Returns a refusal message string, or None if no ambiguity is found.
+        """
+        # ── 1. Gate on date-related question intent ───────────────────────────
+        DATE_INTENT_KEYWORDS = {
+            "date", "day", "month", "year",
+            "before", "after", "between", "on ",
+            "orders placed", "transactions made", "records from",
+            "placed on", "made on", "from ", "since ", "until ",
+            "weekly", "monthly", "daily", "yearly",
+        }
+        q_lower = question.lower()
+        if not any(kw in q_lower for kw in DATE_INTENT_KEYWORDS):
+            return None
+
+        # ── 2. Find all slash-form dates in the question ──────────────────────
+        # Matches:  D/M/YYYY  DD/MM/YYYY  M/D/YYYY  MM/DD/YYYY
+        # Does NOT match ISO (YYYY-MM-DD) — those are unambiguous.
+        SLASH_DATE_RE = re.compile(
+            r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"
+        )
+
+        for match in SLASH_DATE_RE.finditer(question):
+            left = int(match.group(1))
+            right = int(match.group(2))
+            year = match.group(3)
+            raw = match.group(0)
+
+            # Unambiguous: one of the parts cannot be a valid month (1–12)
+            left_is_month = 1 <= left <= 12
+            right_is_month = 1 <= right <= 12
+
+            if left_is_month and right_is_month:
+                # Both interpretations are valid → ambiguous
+                return (
+                    f"Cannot determine reliably because the date '{raw}' is ambiguous. "
+                    f"It could mean {left} {_MONTH_NAMES[right - 1]} {year} (DD/MM/YYYY) "
+                    f"or {right} {_MONTH_NAMES[left - 1]} {year} (MM/DD/YYYY). "
+                    f"Please specify the date format."
+                )
+            # Otherwise at least one part > 12, so the format is unambiguous.
+
+        return None
+
+    def _check_currency_mismatch(self, df: pd.DataFrame, question: str) -> dict:
+        """
+        Deterministically detect currency/unit mismatch before calling the LLM.
+
+        If the dataframe contains a currency or unit column with more than one
+        distinct value AND the question asks for a numeric aggregation, refuse
+        rather than letting the LLM silently filter to one currency.
+        """
+        # ── 1. Find currency/unit columns ────────────────────────────────────
+        CURRENCY_COL_KEYWORDS = {"currency", "curr", "ccy", "unit", "units", "uom"}
+        currency_cols = [
+            col for col in df.columns
+            if any(kw in col.lower() for kw in CURRENCY_COL_KEYWORDS)
+            and pd.api.types.is_string_dtype(df[col])
+        ]
+
+        if not currency_cols:
+            return {"refuse": False}
+
+        # ── 2. Check if any currency column has multiple distinct values ──────
+        mismatched: list[tuple[str, list[str]]] = []
+        for col in currency_cols:
+            distinct = sorted(df[col].dropna().unique().tolist())
+            if len(distinct) > 1:
+                mismatched.append((col, [str(v) for v in distinct]))
+
+        if not mismatched:
+            return {"refuse": False}
+
+        # ── 3. Check if the question asks for a numeric aggregation ──────────
+        NUMERIC_QUESTION_KEYWORDS = {
+            "total", "sum", "average", "mean", "avg",
+            "maximum", "minimum", "max", "min",
+            "highest", "lowest", "largest", "smallest",
+            "how much", "compare", "difference", "ratio",
+            "revenue", "sales", "amount", "value", "cost", "price",
+            "calculate", "computation", "aggregate",
+        }
+        q_lower = question.lower()
+        asks_numeric = any(kw in q_lower for kw in NUMERIC_QUESTION_KEYWORDS)
+
+        if not asks_numeric:
+            return {"refuse": False}
+
+        # ── 4. Build the refusal message listing the mismatched currencies ───
+        details = "; ".join(
+            f"'{col}' contains {', '.join(vals)}"
+            for col, vals in mismatched
+        )
+        # Flat list of currency values for the message
+        all_currencies = ", ".join(
+            val for _, vals in mismatched for val in vals
+        )
+        refuse_reason = (
+            f"Cannot determine reliably because the dataset contains multiple "
+            f"currencies: {all_currencies}. "
+            f"A currency conversion rule is required before calculating this value."
+        )
+        logger.info("currency_mismatch detected: %s", details)
+        return {"refuse": True, "refuse_reason": refuse_reason}
 
     def _check_data_quality(self, df: pd.DataFrame) -> dict:
         warnings = []
@@ -89,7 +526,7 @@ class DataAnalyst:
             }
 
         total_cells = df.size
-        missing_cells = df.isnull().sum().sum()
+        missing_cells = int(df.isnull().sum().sum())
         missing_pct = (missing_cells / total_cells) * 100 if total_cells > 0 else 0
 
         if missing_pct > 50:
@@ -103,12 +540,10 @@ class DataAnalyst:
                 f"Dataset has {missing_pct:.1f}% missing values. Results may be unreliable."
             )
 
-        # Check for duplicate rows
-        dup_count = df.duplicated().sum()
+        dup_count = int(df.duplicated().sum())
         if dup_count > 0:
             warnings.append(f"Dataset contains {dup_count} duplicate rows.")
 
-        # Check for very small datasets
         if len(df) < 3:
             warnings.append(
                 "Dataset has very few rows. Statistical conclusions may not be meaningful."
@@ -120,11 +555,153 @@ class DataAnalyst:
             "warnings": warnings,
         }
 
+    def _data_quality_report(self, df: pd.DataFrame) -> dict:
+        """
+        Returns a structured data quality report for display in the UI.
+        Only reports issues that are actually detected.
+        """
+        issues = []
+
+        if df.empty:
+            return {"issues": [{"type": "empty", "description": "Dataset is empty.", "severity": "error"}]}
+
+        # Missing values
+        missing = df.isnull().sum()
+        missing_cols = [(col, int(cnt)) for col, cnt in missing.items() if cnt > 0]
+        for col, cnt in missing_cols:
+            pct = round(cnt / len(df) * 100, 1)
+            issues.append({
+                "type": "missing_values",
+                "description": f"Column '{col}' has {cnt} missing values ({pct}%)",
+                "severity": "warning" if pct < 30 else "error",
+                "column": col,
+                "count": cnt,
+            })
+
+        # Duplicate rows
+        dup_count = int(df.duplicated().sum())
+        if dup_count > 0:
+            issues.append({
+                "type": "duplicate_rows",
+                "description": f"{dup_count} duplicate rows detected",
+                "severity": "warning",
+                "count": dup_count,
+            })
+
+        # Empty columns (all null)
+        empty_cols = [col for col in df.columns if df[col].isnull().all()]
+        for col in empty_cols:
+            issues.append({
+                "type": "empty_column",
+                "description": f"Column '{col}' is entirely empty",
+                "severity": "error",
+                "column": col,
+            })
+
+        # Constant columns (single unique value, non-null)
+        for col in df.columns:
+            if df[col].nunique(dropna=True) == 1 and not df[col].isnull().all():
+                issues.append({
+                    "type": "constant_column",
+                    "description": f"Column '{col}' has only one unique value",
+                    "severity": "info",
+                    "column": col,
+                })
+
+        # Potential duplicate ID columns
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ["id", "key", "code", "uuid"]):
+                if df[col].notna().sum() > 0:
+                    dup_ids = int(df[col].dropna().duplicated().sum())
+                    if dup_ids > 0:
+                        issues.append({
+                            "type": "duplicate_ids",
+                            "description": f"Column '{col}' appears to be an ID column but has {dup_ids} duplicate values",
+                            "severity": "warning",
+                            "column": col,
+                            "count": dup_ids,
+                        })
+
+        # Mixed/unexpected types — numeric stored as object
+        for col in df.columns:
+            if df[col].dtype == object:
+                sample = df[col].dropna().head(100)
+                try:
+                    converted = pd.to_numeric(sample, errors="coerce")
+                    non_null_rate = converted.notna().sum() / len(sample) if len(sample) > 0 else 0
+                    if 0.3 < non_null_rate < 0.95:
+                        issues.append({
+                            "type": "mixed_types",
+                            "description": f"Column '{col}' contains mixed numeric and non-numeric values",
+                            "severity": "warning",
+                            "column": col,
+                        })
+                except Exception:
+                    pass
+
+        return {
+            "issues": issues,
+            "total_issues": len(issues),
+            "has_errors": any(i["severity"] == "error" for i in issues),
+            "has_warnings": any(i["severity"] == "warning" for i in issues),
+        }
+
     def _dataset_summary(self, df: pd.DataFrame, filename: str) -> dict:
         return {
             "filename": filename,
             "rows": len(df),
             "columns": list(df.columns),
             "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-            "missing_values": df.isnull().sum().to_dict(),
+            "missing_values": {col: int(v) for col, v in df.isnull().sum().items()},
         }
+
+    def _build_reproducible_proof(
+        self,
+        generated_code: str,
+        filename: str,
+    ) -> str:
+        """
+        Build a complete, standalone Python script that reproduces the analysis result.
+        
+        This wraps the LLM-generated analysis code with:
+        - Required imports (pandas, numpy)
+        - Dataset loading code using the actual uploaded filename
+        - The generated analysis code
+        - Output printing
+        
+        The script can be copied and run in PyCharm, VS Code, Jupyter, or Colab.
+        """
+        # Determine file extension to use correct pandas loader
+        file_lower = filename.lower()
+        if file_lower.endswith('.csv'):
+            load_statement = f'df = pd.read_csv("{filename}")'
+        elif file_lower.endswith(('.xlsx', '.xls')):
+            load_statement = f'df = pd.read_excel("{filename}")'
+        else:
+            # Default to CSV for unknown extensions
+            load_statement = f'df = pd.read_csv("{filename}")'
+        
+        # Build the complete script
+        script = f"""#!/usr/bin/env python3
+\"\"\"
+Reproducible Proof Script
+Generated by ProofAI
+
+This script reproduces the analysis result independently.
+Run it with the uploaded dataset to verify the answer.
+\"\"\"
+
+import pandas as pd
+import numpy as np
+
+# Load the dataset
+{load_statement}
+
+# Execute the analysis
+{generated_code}
+
+# Display the result
+print("Result:", result)
+"""
+        return script
