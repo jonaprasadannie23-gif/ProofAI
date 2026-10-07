@@ -32,7 +32,6 @@ class DataAnalyst:
         df: pd.DataFrame,
         filename: str,
         context_history: list | None = None,
-        target_currency: str | None = None,
     ) -> dict:
         warnings = []
 
@@ -60,9 +59,7 @@ class DataAnalyst:
                 "analysis_mode": "refused",
             }
 
-        # --- Date ambiguity guard (MUST check BEFORE currency for date-specific questions) ---
-        # When a question involves a specific date or temporal grouping, check date ambiguity first
-        # so we don't incorrectly blame currency issues for date-specific problems
+        # --- Date ambiguity guard (CHECK FIRST - more specific than currency) ---
         date_refusal = self._check_date_ambiguity(question, df)
         if date_refusal is not None:
             logger.info(
@@ -85,8 +82,7 @@ class DataAnalyst:
             }
 
         # --- Currency / unit mismatch guard ---
-        # Only fires when the question involves monetary aggregation AND no date ambiguity was found
-        currency_check = self._check_currency_mismatch(df, question, target_currency=target_currency)
+        currency_check = self._check_currency_mismatch(df, question)
         if currency_check["refuse"]:
             logger.info(
                 "analysis_mode=refused reason=currency_mismatch question=%r file=%s",
@@ -97,12 +93,15 @@ class DataAnalyst:
                 "answer": None,
                 "verification": "REFUSED",
                 "verification_detail": currency_check["refuse_reason"],
-                "currency_conversion_options": currency_check.get("currency_conversion_options"),
                 "generated_code": None,
                 "dataset_summary": self._dataset_summary(df, filename),
                 "data_quality": self._data_quality_report(df),
                 "warnings": warnings,
                 "ai_answer": None,
+                "code_result": None,
+                "match": None,
+                "analysis_mode": "refused",
+            }
                 "code_result": None,
                 "match": None,
                 "analysis_mode": "refused",
@@ -130,29 +129,6 @@ class DataAnalyst:
                 "analysis_mode": "refused",
             }
 
-        # --- Target currency conversion handle ---
-        if target_currency and target_currency.upper() in ["INR", "USD"]:
-            fallback = run_local_fallback(question, df, target_currency=target_currency)
-            if fallback is not None:
-                exec_res = execute_code(fallback.generated_code, df)
-                if exec_res["success"]:
-                    ans = str(exec_res["output"])
-                    return {
-                        "status": "success",
-                        "answer": ans,
-                        "verification": "VERIFIED",
-                        "verification_detail": f"Result converted to {target_currency.upper()} using exchange rate 1 USD = ₹83.50",
-                        "generated_code": fallback.generated_code,
-                        "reproducible_proof": self._build_reproducible_proof(fallback.generated_code, filename),
-                        "dataset_summary": self._dataset_summary(df, filename),
-                        "data_quality": self._data_quality_report(df),
-                        "warnings": warnings,
-                        "ai_answer": ans,
-                        "code_result": ans,
-                        "match": True,
-                        "analysis_mode": "currency_conversion",
-                    }
-
         # --- Generate code via LLM ---
         try:
             generated_code = await generate_analysis_code(
@@ -160,7 +136,6 @@ class DataAnalyst:
                 df=df,
                 filename=filename,
                 context_history=context_history or [],
-                target_currency=target_currency,
             )
             logger.info("analysis_mode=gemini question=%r file=%s", question, filename)
 
@@ -172,7 +147,7 @@ class DataAnalyst:
                 "analysis_mode=local_fallback reason=%s question=%r file=%s",
                 e, question, filename,
             )
-            fallback = run_local_fallback(question, df, target_currency=target_currency)
+            fallback = run_local_fallback(question, df)
 
             if fallback is not None:
                 return {
@@ -426,13 +401,8 @@ class DataAnalyst:
         self, question: str, df: pd.DataFrame
     ) -> str | None:
         """
-        Detect date ambiguity in two scenarios:
-
-        1. Slash-form dates in the question that are ambiguous between
-           DD/MM/YYYY and MM/DD/YYYY interpretations.
-
-        2. Questions that require interpreting date columns when those columns
-           contain ambiguous slash-form dates.
+        Detect slash-form dates in the question that are ambiguous between
+        DD/MM/YYYY and MM/DD/YYYY interpretations.
 
         A date X/Y/YYYY is ambiguous when both X <= 12 and Y <= 12, so either
         field could be the month.  Unambiguous examples:
@@ -452,11 +422,6 @@ class DataAnalyst:
             "orders placed", "transactions made", "records from",
             "placed on", "made on", "from ", "since ", "until ",
             "weekly", "monthly", "daily", "yearly",
-            "each month", "per month", "each day", "per day",
-            "each week", "per week", "each year", "per year",
-            "in march", "in april", "in january", "in february",
-            "in may", "in june", "in july", "in august",
-            "in september", "in october", "in november", "in december",
         }
         q_lower = question.lower()
         if not any(kw in q_lower for kw in DATE_INTENT_KEYWORDS):
@@ -489,89 +454,15 @@ class DataAnalyst:
                 )
             # Otherwise at least one part > 12, so the format is unambiguous.
 
-        # ── 3. Check if question requires interpreting date columns ───────────
-        # Look for date-like column names in the dataset
-        date_columns = [
-            col for col in df.columns
-            if any(date_word in col.lower() for date_word in ["date", "time", "day", "month", "year"])
-        ]
-
-        if not date_columns:
-            return None
-
-        # Questions with temporal grouping/filtering ALWAYS imply date column usage
-        temporal_grouping_keywords = {
-            "each month", "per month", "monthly",
-            "each day", "per day", "daily",
-            "each week", "per week", "weekly",
-            "each year", "per year", "yearly",
-            "by month", "by day", "by week", "by year",
-            "in march", "in april", "in january", "in february",
-            "in may", "in june", "in july", "in august",
-            "in september", "in october", "in november", "in december",
-        }
-        implies_date_grouping = any(kw in q_lower for kw in temporal_grouping_keywords)
-
-        # Check if any date column is mentioned explicitly in the question
-        # Match variations like "Order_Date", "order_date", "order date", "date"
-        question_mentions_date_col = False
-        for col in date_columns:
-            col_lower = col.lower()
-            col_with_spaces = col.replace("_", " ").lower()
-            # Check exact match or if column name appears in the question
-            if col_lower in q_lower or col_with_spaces in q_lower:
-                question_mentions_date_col = True
-                break
-            # Also check if the question contains words that strongly imply the date column
-            # e.g., "date" column should match "based on date" or just "date"
-            if col_lower == "date" and "date" in q_lower:
-                question_mentions_date_col = True
-                break
-
-        if question_mentions_date_col or implies_date_grouping:
-            # Scan the first date column for ambiguous slash-form dates
-            for date_col in date_columns:
-                if date_col not in df.columns:
-                    continue
-
-                # Sample some values from the date column
-                sample_values = df[date_col].dropna().head(10).astype(str)
-
-                for val in sample_values:
-                    match = SLASH_DATE_RE.search(val)
-                    if match:
-                        left = int(match.group(1))
-                        right = int(match.group(2))
-                        raw = match.group(0)
-
-                        left_is_month = 1 <= left <= 12
-                        right_is_month = 1 <= right <= 12
-
-                        if left_is_month and right_is_month:
-                            # Found ambiguous date in the column
-                            return (
-                                f"Cannot determine reliably because the {date_col} column contains ambiguous date formats. "
-                                f"Dates such as {raw} could represent different dates depending on the format. "
-                                f"Please specify the date format."
-                            )
-
         return None
 
-    def _check_currency_mismatch(
-        self, df: pd.DataFrame, question: str, target_currency: str | None = None
-    ) -> dict:
+    def _check_currency_mismatch(self, df: pd.DataFrame, question: str) -> dict:
         """
         Deterministically detect currency/unit mismatch before calling the LLM.
 
-        Only fires when:
-        1. Dataset contains multiple currencies AND
-        2. Question asks for monetary aggregation/comparison AND
-        3. Question does NOT specify a single currency filter
-
-        Does NOT fire for:
-        - Counting questions (how many orders)
-        - Non-monetary fields (quantity, order_id)
-        - Currency-specific questions (INR orders only)
+        If the dataframe contains a currency or unit column with more than one
+        distinct value AND the question asks for a numeric aggregation, refuse
+        rather than letting the LLM silently filter to one currency.
         """
         # ── 1. Find currency/unit columns ────────────────────────────────────
         CURRENCY_COL_KEYWORDS = {"currency", "curr", "ccy", "unit", "units", "uom"}
@@ -594,75 +485,57 @@ class DataAnalyst:
         if not mismatched:
             return {"refuse": False}
 
-        q_lower = question.lower()
-
-        # ── 3. Early exit: Counting questions don't need currency conversion ──
+        # ── 3. Check if the question asks for a numeric aggregation ──────────
+        # Counting questions don't need currency conversion
         COUNTING_KEYWORDS = {
-            "how many", "count", "number of", "total number",
+            "how many", "count", "number of", "total number", 
+            "how much orders", "orders placed", "orders were",
         }
+        q_lower = question.lower()
+        
+        # If question is primarily counting, skip currency check
         is_counting = any(kw in q_lower for kw in COUNTING_KEYWORDS)
-        if is_counting and not any(kw in q_lower for kw in ["revenue", "sales", "amount", "value", "cost", "price"]):
-            # Pure counting questions like "how many orders" should pass
+        if is_counting:
             return {"refuse": False}
-
-        # ── 4. Check if question involves MONETARY aggregation ───────────────
-        MONETARY_KEYWORDS = {
+        
+        NUMERIC_QUESTION_KEYWORDS = {
+            "total", "sum", "average", "mean", "avg",
+            "maximum", "minimum", "max", "min",
+            "highest", "lowest", "largest", "smallest",
+            "how much", "compare", "difference", "ratio",
             "revenue", "sales", "amount", "value", "cost", "price",
-            "total", "sum", "average", "mean",
+            "calculate", "computation", "aggregate",
         }
-        asks_monetary = any(kw in q_lower for kw in MONETARY_KEYWORDS)
+        asks_numeric = any(kw in q_lower for kw in NUMERIC_QUESTION_KEYWORDS)
 
-        if not asks_monetary:
-            # Question doesn't involve monetary calculations
-            # e.g., "maximum quantity", "count orders on a date"
+        if not asks_numeric:
             return {"refuse": False}
-
-        # ── 5. Check if question specifies a single currency ─────────────────
-        # If user explicitly mentions one currency, they're filtering to that subset
+            
+        # Check if question specifies a single currency (e.g., "INR orders")
+        # If so, it's asking for a filtered subset, not mixing currencies
         for _, vals in mismatched:
             for currency in vals:
-                # Check for patterns like "INR orders", "USD revenue", "for INR"
-                currency_lower = currency.lower()
-                if any(pattern in q_lower for pattern in [
-                    f"{currency_lower} order",
-                    f"{currency_lower} revenue",
-                    f"{currency_lower} sale",
-                    f"for {currency_lower}",
-                    f"in {currency_lower}",
-                    f"with {currency_lower}",
-                ]):
+                if currency.lower() in q_lower:
+                    # Question mentions specific currency - likely filtering, not mixing
                     logger.info(f"Question mentions specific currency '{currency}', allowing")
                     return {"refuse": False}
 
-        # ── 6. Check target_currency parameter ───────────────────────────────
-        if target_currency and target_currency.upper() in ["INR", "USD"]:
-            return {"refuse": False, "target_currency": target_currency.upper()}
-
-        # ── 7. Build refusal message + options ───────────────────────────────
-        all_vals = set(val.upper() for _, vals in mismatched for val in vals)
-        is_inr_usd = all_vals.issubset({"INR", "USD"}) or ("INR" in all_vals and "USD" in all_vals)
-
+        # ── 4. Build the refusal message listing the mismatched currencies ───
+        details = "; ".join(
+            f"'{col}' contains {', '.join(vals)}"
+            for col, vals in mismatched
+        )
+        # Flat list of currency values for the message
         all_currencies = ", ".join(
             val for _, vals in mismatched for val in vals
         )
-        if is_inr_usd:
-            refuse_reason = "Your data contains INR and USD. They cannot be safely combined without conversion."
-        else:
-            refuse_reason = (
-                f"Cannot determine reliably because the dataset contains multiple "
-                f"currencies: {all_currencies}. "
-                f"A currency conversion rule is required before calculating this value."
-            )
-
-        return {
-            "refuse": True,
-            "refuse_reason": refuse_reason,
-            "currency_conversion_options": {
-                "available": is_inr_usd,
-                "currencies": ["INR", "USD"],
-                "rate": 83.50,
-            } if is_inr_usd else None,
-        }
+        refuse_reason = (
+            f"Cannot determine reliably because the dataset contains multiple "
+            f"currencies: {all_currencies}. "
+            f"A currency conversion rule is required before calculating this value."
+        )
+        logger.info("currency_mismatch detected: %s", details)
+        return {"refuse": True, "refuse_reason": refuse_reason}
 
     def _check_data_quality(self, df: pd.DataFrame) -> dict:
         warnings = []

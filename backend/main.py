@@ -25,3 +25,9 @@ app.include_router(router, prefix="/api")
 @app.get("/")
 def root():
     return {"status": "ok", "service": "ProofAI"}
+
+
+@app.get("/health")
+def health():
+    """Liveness check — returns 200 when the backend is up."""
+    return {"status": "ok", "service": "ProofAI", "version": app.version}

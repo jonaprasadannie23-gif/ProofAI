@@ -1,0 +1,6 @@
+order_id,date,product,quantity,price,currency
+1001,03/04/2026,Widget A,5,100.00,USD
+1002,03/04/2026,Widget B,3,150.00,INR
+1003,04/05/2026,Widget C,10,200.00,USD
+1004,05/06/2026,Widget D,2,250.00,INR
+1005,03/04/2026,Widget E,7,300.00,USD

@@ -1,0 +1,7 @@
+product,price,quantity,discount
+Widget A,100.5,10,0.05
+Widget B,,7,0.10
+Gadget X,200.0,,
+Chair Pro,50.75,3,
+,80.0,5,0.15
+Widget Z,999999999999999999999999999,1,0.0
