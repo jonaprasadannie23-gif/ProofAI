@@ -32,6 +32,8 @@ export default function App() {
 
   // ── History state ─────────────────────────────────────────────
   const [history, setHistory]       = useState([]);
+  const [sessions, setSessions]     = useState([]); // conversation sessions
+  const [currentSessionId, setCurrentSessionId] = useState(null);
 
   // ── Follow-up state ───────────────────────────────────────────
   const [isFollowUp, setIsFollowUp] = useState(false);
@@ -107,6 +109,10 @@ export default function App() {
     setConversation([]);
     setIsFollowUp(false);
     setFollowUpContext([]);
+    
+    // Start a new session
+    const sessionId = `session-${Date.now()}`;
+    setCurrentSessionId(sessionId);
   };
 
   const handleRemoveFile = (fileId) => {
@@ -139,7 +145,41 @@ export default function App() {
   };
 
   const handleAddToHistory = (item) => {
-    setHistory((prev) => [...prev, item]);
+    // Add status from result to top level for easy access
+    const historyItem = {
+      ...item,
+      id: `${Date.now()}-${Math.random()}`,
+      status: item.result?.status || 'error',
+      sessionId: currentSessionId,
+    };
+    setHistory((prev) => [...prev, historyItem]);
+    
+    // Update or create session
+    setSessions((prev) => {
+      const existingIdx = prev.findIndex(s => s.id === currentSessionId);
+      if (existingIdx >= 0) {
+        // Update existing session
+        const updated = [...prev];
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          questions: [...updated[existingIdx].questions, historyItem],
+          lastUpdated: new Date().toISOString(),
+        };
+        return updated;
+      } else {
+        // Create new session
+        return [...prev, {
+          id: currentSessionId,
+          title: item.question, // First question as title
+          questions: [historyItem],
+          datasets: [item.filename],
+          datasetObjects: dataset ? [dataset] : [],
+          created: new Date().toISOString(),
+          lastUpdated: new Date().toISOString(),
+        }];
+      }
+    });
+    
     // Build follow-up context
     setFollowUpContext((prev) => [
       ...prev,
@@ -161,6 +201,43 @@ export default function App() {
       setDataset(matchingFile);
       setActiveFileId(matchingFile.id);
     }
+  };
+  
+  const handleOpenSession = (session) => {
+    // Restore entire conversation session
+    setActiveView("new");
+    
+    // Restore dataset(s)
+    if (session.datasetObjects && session.datasetObjects.length > 0) {
+      const firstDataset = session.datasetObjects[0];
+      setDataset(firstDataset);
+      setActiveFileId(firstDataset.id);
+    } else if (session.datasets && session.datasets.length > 0) {
+      // Try to find matching file by name
+      const matchingFile = files.find((f) => session.datasets.includes(f.filename));
+      if (matchingFile) {
+        setDataset(matchingFile);
+        setActiveFileId(matchingFile.id);
+      }
+    }
+    
+    // Restore conversation - convert history items to conversation format
+    const restoredConversation = session.questions.map(q => ({
+      ...q.result,
+      question: q.question,
+    }));
+    setConversation(restoredConversation);
+    
+    // Restore follow-up context
+    const restoredContext = session.questions.map(q => ({
+      question: q.question,
+      answer: q.answer || "",
+    }));
+    setFollowUpContext(restoredContext);
+    
+    // Set as current session
+    setCurrentSessionId(session.id);
+    setIsFollowUp(true);
   };
 
   const handleSelectFile = (file) => {
@@ -202,6 +279,24 @@ export default function App() {
 
   // ── Render ────────────────────────────────────────────────────
 
+  // Convert conversation to chat messages format
+  const chatMessages = conversation.flatMap((result) => {
+    const userMsg = {
+      id: `user-${result.question || Date.now()}`,
+      role: 'user',
+      content: result.question || '',
+      timestamp: result.timestamp || new Date().toISOString(),
+    };
+    const assistantMsg = {
+      id: `assistant-${result.question || Date.now()}`,
+      role: 'assistant',
+      content: result.answer || result.verification_detail || '',
+      timestamp: result.timestamp || new Date().toISOString(),
+      result: result,
+    };
+    return [userMsg, assistantMsg];
+  });
+
   return (
     <div className="app-shell">
       <Sidebar activeView={activeView} onNavigate={handleNavigate} />
@@ -238,6 +333,7 @@ export default function App() {
                 onAnalyze={handleAnalyze}
                 isAnalyzing={analyzing}
                 suggestions={dataset?.suggestions || []}
+                initialMessages={chatMessages}
               />
             </div>
           </div>
@@ -269,8 +365,8 @@ export default function App() {
         {activeView === "history" && (
           <div className="page">
             <AnalysisHistory
-              history={history}
-              onOpen={handleOpenHistoryItem}
+              sessions={sessions}
+              onOpen={handleOpenSession}
             />
           </div>
         )}

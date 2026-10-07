@@ -10,12 +10,20 @@ export default function ChatInterface({
   currentFile, 
   onAnalyze, 
   isAnalyzing,
-  suggestions = []
+  suggestions = [],
+  initialMessages = []
 }) {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(initialMessages);
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Update messages when initialMessages changes (session restored)
+  useEffect(() => {
+    if (initialMessages.length > 0) {
+      setMessages(initialMessages);
+    }
+  }, [initialMessages]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
