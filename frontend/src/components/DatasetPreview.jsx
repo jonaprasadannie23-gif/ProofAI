@@ -1,7 +1,9 @@
 import { useState } from "react";
+import FullDatasetViewer from "./FullDatasetViewer";
 
 export default function DatasetPreview({ dataset, maxRows = 10 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showFullViewer, setShowFullViewer] = useState(false);
 
   if (!dataset) return null;
 
@@ -39,56 +41,75 @@ export default function DatasetPreview({ dataset, maxRows = 10 }) {
   const shownRows = expanded ? preview : preview.slice(0, maxRows);
 
   return (
-    <div className="card preview-card" role="region" aria-label="Dataset preview">
-      <div className="preview-header">
-        <p className="card-label" style={{ marginBottom: 0 }}>Preview</p>
-        <div className="badge-row">
-          <span className="badge">{columns.length} cols</span>
-          <span className="badge">{rows_total.toLocaleString()} rows</span>
-          {hasNulls && <span className="badge badge-warn">Missing values</span>}
+    <>
+      <div className="card preview-card" role="region" aria-label="Dataset preview">
+        <div className="preview-header">
+          <p className="card-label" style={{ marginBottom: 0 }}>Preview</p>
+          <div className="badge-row">
+            <span className="badge">{columns.length} cols</span>
+            <span className="badge">{rows_total.toLocaleString()} rows</span>
+            {hasNulls && <span className="badge badge-warn">Missing values</span>}
+          </div>
+        </div>
+
+        <div className="table-wrap" role="table" aria-label="Data preview table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                {columns.map((col) => (
+                  <th key={col} scope="col">
+                    <div className="th-col">{col}</div>
+                    {dtypes[col] && <div className="th-type">{dtypes[col]}</div>}
+                    {missing[col] > 0 && (
+                      <div className="th-null">{missing[col]} null</div>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shownRows.map((row, i) => (
+                <tr key={i}>
+                  {columns.map((col) => (
+                    <td key={col} title={row[col] != null ? String(row[col]) : "null"}>
+                      {row[col] == null ? (
+                        <span className="td-null">—</span>
+                      ) : (
+                        String(row[col])
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="preview-actions-row">
+          {preview.length > maxRows && (
+            <button className="show-more-btn" onClick={() => setExpanded(!expanded)}>
+              {expanded
+                ? "Show fewer rows"
+                : `Show all ${preview.length} preview rows →`}
+            </button>
+          )}
+
+          <button
+            className="view-full-btn"
+            onClick={() => setShowFullViewer(true)}
+            aria-label="View Full Dataset"
+          >
+            View Full Dataset
+          </button>
         </div>
       </div>
 
-      <div className="table-wrap" role="table" aria-label="Data preview table">
-        <table className="data-table">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col} scope="col">
-                  <div className="th-col">{col}</div>
-                  {dtypes[col] && <div className="th-type">{dtypes[col]}</div>}
-                  {missing[col] > 0 && (
-                    <div className="th-null">{missing[col]} null</div>
-                  )}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {shownRows.map((row, i) => (
-              <tr key={i}>
-                {columns.map((col) => (
-                  <td key={col} title={row[col] != null ? String(row[col]) : "null"}>
-                    {row[col] == null ? (
-                      <span className="td-null">—</span>
-                    ) : (
-                      String(row[col])
-                    )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {preview.length > maxRows && (
-        <button className="show-more-btn" onClick={() => setExpanded(!expanded)}>
-          {expanded
-            ? "Show fewer rows"
-            : `Show all ${preview.length} preview rows →`}
-        </button>
+      {showFullViewer && (
+        <FullDatasetViewer
+          dataset={dataset}
+          onClose={() => setShowFullViewer(false)}
+        />
       )}
-    </div>
+    </>
   );
 }

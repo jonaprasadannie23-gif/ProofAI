@@ -22,13 +22,13 @@ export default function App() {
   const [activeView, setActiveView] = useState("new");
 
   // ── Dataset / upload state ────────────────────────────────────
-  const [dataset, setDataset]       = useState(null);   // current active dataset
-  const [files, setFiles]           = useState([]);     // all uploaded files (FileManager)
+  const [dataset, setDataset]           = useState(null);   // current active dataset
+  const [files, setFiles]               = useState([]);     // all uploaded files (FileManager + UploadPanel)
   const [activeFileId, setActiveFileId] = useState(null);
 
-  // ── Analysis state ────────────────────────────────────────────
-  const [result, setResult]         = useState(null);
-  const [analyzing, setAnalyzing]   = useState(false);
+  // ── Analysis / Conversation state ──────────────────────────────
+  const [conversation, setConversation] = useState([]); // array of result objects for current session
+  const [analyzing, setAnalyzing]       = useState(false);
 
   // ── History state ─────────────────────────────────────────────
   const [history, setHistory]       = useState([]);
@@ -42,16 +42,59 @@ export default function App() {
 
   // ── Handlers ──────────────────────────────────────────────────
 
+  const handleResult = (newResult) => {
+    if (!newResult) return;
+    setConversation((prev) => [...prev, newResult]);
+    setIsFollowUp(true);
+  };
+
   const handleUpload = (uploadedDataset) => {
-    setDataset(uploadedDataset);
-    setResult(null);
+    const fileId = uploadedDataset.id || `${Date.now()}-${Math.random()}`;
+    const fileEntry = {
+      ...uploadedDataset,
+      id: fileId,
+    };
+    setFiles((prev) => {
+      const idx = prev.findIndex((f) => f.filename === fileEntry.filename);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = fileEntry;
+        return copy;
+      }
+      return [...prev, fileEntry];
+    });
+    setDataset(fileEntry);
+    setActiveFileId(fileId);
+    setConversation([]);
     setIsFollowUp(false);
     setFollowUpContext([]);
   };
 
+  const handleRemoveFile = (fileId) => {
+    setFiles((prevFiles) => {
+      const updated = prevFiles.filter((f) => f.id !== fileId && f.filename !== fileId);
+      if (activeFileId === fileId || dataset?.id === fileId) {
+        if (updated.length > 0) {
+          const nextActive = updated[updated.length - 1];
+          setDataset(nextActive);
+          setActiveFileId(nextActive.id);
+        } else {
+          setDataset(null);
+          setActiveFileId(null);
+          setConversation([]);
+          setIsFollowUp(false);
+          setFollowUpContext([]);
+        }
+      }
+      return updated;
+    });
+  };
+
   const handleClear = () => {
     setDataset(null);
-    setResult(null);
+    setFiles([]);
+    setActiveFileId(null);
+    setConversation([]);
     setIsFollowUp(false);
     setFollowUpContext([]);
   };
@@ -67,19 +110,24 @@ export default function App() {
 
   const handleOpenHistoryItem = (item) => {
     // Restore result from history and switch to analysis view
-    setResult(item.result);
+    const restoredResult = item.result
+      ? { ...item.result, question: item.question }
+      : { question: item.question, answer: item.answer };
+    setConversation([restoredResult]);
+    setIsFollowUp(true);
     setActiveView("new");
     // Re-load the dataset that was used if we can find it by filename
     const matchingFile = files.find((f) => f.filename === item.filename);
     if (matchingFile) {
       setDataset(matchingFile);
+      setActiveFileId(matchingFile.id);
     }
   };
 
   const handleSelectFile = (file) => {
     setDataset(file);
     setActiveFileId(file.id);
-    setResult(null);
+    setConversation([]);
     setIsFollowUp(false);
     setFollowUpContext([]);
     setActiveView("new");
@@ -88,17 +136,21 @@ export default function App() {
   const handleFilesChange = (updatedFiles) => {
     setFiles(updatedFiles);
     // If current dataset was removed, clear it
-    if (dataset && !updatedFiles.find((f) => f.id === activeFileId)) {
-      setDataset(null);
-      setActiveFileId(null);
-      setResult(null);
+    if (dataset && !updatedFiles.find((f) => f.id === activeFileId || f.filename === dataset.filename)) {
+      if (updatedFiles.length > 0) {
+        setDataset(updatedFiles[updatedFiles.length - 1]);
+        setActiveFileId(updatedFiles[updatedFiles.length - 1].id);
+      } else {
+        setDataset(null);
+        setActiveFileId(null);
+        setConversation([]);
+      }
     }
   };
 
   const handleFollowUp = () => {
     setIsFollowUp(true);
-    setResult(null);
-    // Keep dataset and followUpContext intact
+    // Keep conversation and followUpContext intact
   };
 
   const handleNavigate = (view) => {
@@ -125,8 +177,12 @@ export default function App() {
               {/* Left: upload + preview stacked */}
               <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
                 <UploadPanel
+                  files={files}
                   dataset={dataset}
+                  activeFileId={activeFileId}
                   onUpload={handleUpload}
+                  onSelectFile={handleSelectFile}
+                  onRemoveFile={handleRemoveFile}
                   onClear={handleClear}
                 />
                 {dataset && (
@@ -140,7 +196,7 @@ export default function App() {
               {/* Right: question */}
               <QuestionPanel
                 dataset={dataset}
-                onResult={setResult}
+                onResult={handleResult}
                 analyzing={analyzing}
                 setAnalyzing={setAnalyzing}
                 contextHistory={followUpContext}
@@ -150,14 +206,17 @@ export default function App() {
             </div>
 
             {/* Results — full width below */}
-            {analyzing ? (
+            {conversation.length === 0 && analyzing ? (
               <AnalyzingResult />
-            ) : result ? (
-              <ResultPanel
-                result={result}
-                settings={settings}
-                onFollowUp={handleFollowUp}
-              />
+            ) : conversation.length > 0 ? (
+              <>
+                <ResultPanel
+                  results={conversation}
+                  settings={settings}
+                  onFollowUp={handleFollowUp}
+                />
+                {analyzing && <AnalyzingResult />}
+              </>
             ) : (
               <IdleResult />
             )}

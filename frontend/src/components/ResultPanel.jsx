@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import VerificationPanel from "./VerificationPanel";
 import DataQualityPanel from "./DataQualityPanel";
 
@@ -58,8 +58,8 @@ export function AnalyzingResult() {
   );
 }
 
-/* ── Main result ─────────────────────────────────────────────── */
-export default function ResultPanel({ result, settings, onFollowUp }) {
+/* ── Single Result Item Component ─────────────────────────────── */
+function ResultItem({ result, settings, isLast, onFollowUp }) {
   const [codeOpen, setCodeOpen]         = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [proofOpen, setProofOpen]       = useState(false);
@@ -91,9 +91,17 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
   const ds = result.dataset_summary;
 
   return (
-    <div className="result-stack">
+    <div className="result-item-wrap">
       {/* ── Main answer card ── */}
       <div className="card result-card" role="region" aria-label="Analysis result">
+
+        {/* ── Question section ── */}
+        {result.question && (
+          <div className="question-section">
+            <span className="question-heading">Question</span>
+            <p className="question-text">"{result.question}"</p>
+          </div>
+        )}
 
         {/* ── Answer section ── */}
         <div className="answer-section">
@@ -134,7 +142,6 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
               className="section-toggle"
               onClick={() => setCodeOpen(!codeOpen)}
               aria-expanded={codeOpen}
-              aria-controls="code-block"
             >
               <span className="section-toggle-left">
                 <CodeIcon />
@@ -146,7 +153,7 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
             </button>
 
             {codeOpen && (
-              <div className="code-body" id="code-block">
+              <div className="code-body">
                 <div className="code-toolbar">
                   <span className="code-lang">python</span>
                   <button
@@ -171,7 +178,6 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
               style={{ padding: "0 0 12px 0" }}
               onClick={() => setEvidenceOpen(!evidenceOpen)}
               aria-expanded={evidenceOpen}
-              aria-controls="evidence-block"
             >
               <span className="section-toggle-left">
                 <DbIcon />
@@ -183,7 +189,7 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
             </button>
 
             {evidenceOpen && (
-              <div id="evidence-block">
+              <div>
                 <div className="evidence-grid">
                   <div className="evidence-item">
                     <p className="evidence-key">File</p>
@@ -220,7 +226,6 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
               className="section-toggle"
               onClick={() => setProofOpen(!proofOpen)}
               aria-expanded={proofOpen}
-              aria-controls="proof-block"
             >
               <span className="section-toggle-left">
                 <CodeIcon />
@@ -232,7 +237,7 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
             </button>
 
             {proofOpen && (
-              <div className="code-body" id="proof-block">
+              <div className="code-body">
                 <p className="proof-desc">
                   Run this complete Python script with the uploaded dataset to reproduce the result independently.
                 </p>
@@ -263,8 +268,8 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
         <DataQualityPanel dataQuality={result.data_quality} />
       )}
 
-      {/* ── Follow-up prompt ── */}
-      {result.status === "success" && onFollowUp && (
+      {/* ── Follow-up prompt (on last item only) ── */}
+      {isLast && result.status === "success" && onFollowUp && (
         <div className="followup-prompt">
           <span className="followup-label">Have a follow-up question?</span>
           <button className="followup-btn" onClick={onFollowUp}>
@@ -272,6 +277,40 @@ export default function ResultPanel({ result, settings, onFollowUp }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Main result container ─────────────────────────────────────── */
+export default function ResultPanel({ result, results, settings, onFollowUp }) {
+  const endRef = useRef(null);
+
+  const resultList = results && results.length > 0
+    ? results
+    : (result ? [result] : []);
+
+  useEffect(() => {
+    if (resultList.length > 1) {
+      endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [resultList.length]);
+
+  if (resultList.length === 0) {
+    return <IdleResult />;
+  }
+
+  return (
+    <div className="result-stack conversation-container">
+      {resultList.map((res, index) => (
+        <ResultItem
+          key={res.id || `${index}-${res.question}`}
+          result={res}
+          settings={settings}
+          isLast={index === resultList.length - 1}
+          onFollowUp={onFollowUp}
+        />
+      ))}
+      <div ref={endRef} />
     </div>
   );
 }

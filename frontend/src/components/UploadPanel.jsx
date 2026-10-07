@@ -33,10 +33,18 @@ function XIcon() {
 }
 
 /* ── Component ──────────────────────────────────────────────── */
-export default function UploadPanel({ onUpload, onClear, dataset }) {
+export default function UploadPanel({
+  files = [],
+  dataset,
+  activeFileId,
+  onUpload,
+  onSelectFile,
+  onRemoveFile,
+  onClear,
+}) {
   const [dragging, setDragging] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
   const inputRef = useRef();
 
   const uploadFile = async (file) => {
@@ -63,25 +71,53 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
-    uploadFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      uploadFile(e.dataTransfer.files[0]);
+    }
   };
 
-  const handleClear = () => {
-    setError(null);
-    onClear();
-  };
+  // Fallback files list if only single dataset prop passed
+  const displayFiles = files.length > 0
+    ? files
+    : (dataset ? [dataset] : []);
 
-  // For backward compat: check if we have tabular data fields
-  const rows     = dataset?.row_count ?? dataset?.rows ?? 0;
-  const cols     = dataset?.col_count ?? dataset?.columns?.length ?? 0;
-  const fileType = dataset?.file_type ?? "file";
+  const activeId = activeFileId || dataset?.id || dataset?.filename;
 
   return (
     <div className="card" role="region" aria-label="Dataset upload">
-      <p className="card-label">Dataset</p>
+      {/* Hidden file input */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPTED_EXTENSIONS}
+        style={{ display: "none" }}
+        onChange={(e) => uploadFile(e.target.files[0])}
+      />
 
-      {/* ── Dropzone (no file yet) ── */}
-      {!dataset ? (
+      <div className="card-label-row">
+        <p className="card-label" style={{ marginBottom: 0 }}>
+          {displayFiles.length > 0 ? `Datasets (${displayFiles.length})` : "Dataset"}
+        </p>
+        {displayFiles.length > 0 && (
+          <button
+            className="add-files-btn"
+            onClick={() => !loading && inputRef.current.click()}
+            disabled={loading}
+          >
+            + Add files
+          </button>
+        )}
+      </div>
+
+      {loading && (
+        <div className="dropzone-loading" style={{ padding: "12px 0" }}>
+          <div className="upload-spinner" aria-hidden="true" />
+          <p className="dropzone-secondary">Parsing dataset…</p>
+        </div>
+      )}
+
+      {/* ── Dropzone (no files uploaded yet) ── */}
+      {displayFiles.length === 0 && !loading && (
         <>
           <div
             className={`dropzone${dragging ? " dragging" : ""}`}
@@ -94,33 +130,16 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
             aria-label="Upload a data file"
             onKeyDown={(e) => e.key === "Enter" && inputRef.current.click()}
           >
-            <input
-              ref={inputRef}
-              type="file"
-              accept={ACCEPTED_EXTENSIONS}
-              style={{ display: "none" }}
-              onChange={(e) => uploadFile(e.target.files[0])}
-            />
-
-            {loading ? (
-              <div className="dropzone-loading">
-                <div className="upload-spinner" aria-hidden="true" />
-                <p className="dropzone-secondary">Parsing dataset…</p>
-              </div>
-            ) : (
-              <>
-                <div className="dropzone-upload-icon">
-                  <UploadIcon />
-                </div>
-                <p className="dropzone-primary">Drop your file here</p>
-                <p className="dropzone-secondary">
-                  or <span>click to browse</span>
-                </p>
-                <p className="dropzone-formats">
-                  CSV · Excel · JSON · HTML · TXT · PDF
-                </p>
-              </>
-            )}
+            <div className="dropzone-upload-icon">
+              <UploadIcon />
+            </div>
+            <p className="dropzone-primary">Drop your file here</p>
+            <p className="dropzone-secondary">
+              or <span>click to browse</span>
+            </p>
+            <p className="dropzone-formats">
+              CSV · Excel · JSON · HTML · TXT · PDF
+            </p>
           </div>
 
           {error && (
@@ -129,52 +148,81 @@ export default function UploadPanel({ onUpload, onClear, dataset }) {
             </p>
           )}
         </>
-      ) : (
-        /* ── File loaded state ── */
+      )}
+
+      {/* ── Multiple uploaded files list ── */}
+      {displayFiles.length > 0 && (
         <>
-          <div className="file-pill">
-            <div className="file-pill-icon" aria-hidden="true">
-              <FileIcon />
-            </div>
-            <div className="file-pill-info">
-              <div className="file-pill-name">{dataset.filename}</div>
-              <div className="file-pill-meta">
-                {dataset.is_tabular === false ? (
-                  <span className="file-pill-type">{fileType.toUpperCase()} · Non-tabular</span>
-                ) : (
-                  <>
-                    <span className="file-pill-type">{fileType.toUpperCase()}</span>
-                    {" · "}
-                    {rows.toLocaleString()} rows · {cols} columns
-                  </>
-                )}
-              </div>
-            </div>
-            <button
-              className="file-pill-remove"
-              onClick={handleClear}
-              aria-label="Remove dataset"
-            >
-              <XIcon />
-            </button>
+          <div
+            className="file-list"
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+          >
+            {displayFiles.map((file) => {
+              const fileKey = file.id || file.filename;
+              const isActive = activeId === fileKey || activeId === file.id || (dataset && dataset.filename === file.filename);
+              const rows = file.row_count ?? file.rows ?? 0;
+              const cols = file.col_count ?? file.columns?.length ?? 0;
+              const fileType = file.file_type ?? "file";
+
+              return (
+                <div
+                  key={fileKey}
+                  className={`file-pill-item${isActive ? " active" : ""}`}
+                  onClick={() => onSelectFile && onSelectFile(file)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${file.filename}`}
+                >
+                  <div className="file-pill-left">
+                    <div className="file-pill-icon" aria-hidden="true">
+                      <FileIcon />
+                    </div>
+                    <div className="file-pill-info">
+                      <div className="file-pill-name-row">
+                        <span className="file-pill-name">{file.filename}</span>
+                        {isActive && <span className="active-badge">Active</span>}
+                      </div>
+                      <div className="file-pill-meta">
+                        {file.is_tabular === false ? (
+                          <span className="file-pill-type">{fileType.toUpperCase()} · Non-tabular</span>
+                        ) : (
+                          <span className="file-pill-type">
+                            {fileType.toUpperCase()} · {rows.toLocaleString()} rows · {cols} cols
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    className="file-pill-remove"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onRemoveFile && file.id) {
+                        onRemoveFile(file.id);
+                      } else if (onClear) {
+                        onClear();
+                      }
+                    }}
+                    aria-label={`Remove ${file.filename}`}
+                    title="Remove dataset"
+                  >
+                    <XIcon />
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
-          {/* Stats — only for tabular data */}
-          {dataset.is_tabular !== false && (
-            <div className="data-stats">
-              <div className="stat-item">
-                <div className="stat-value">{rows.toLocaleString()}</div>
-                <div className="stat-label">Rows</div>
-              </div>
-              <div className="stat-item">
-                <div className="stat-value">{cols}</div>
-                <div className="stat-label">Columns</div>
-              </div>
-            </div>
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
           )}
 
-          {/* Non-tabular warning */}
-          {dataset.is_tabular === false && dataset.parse_error && (
+          {/* Active dataset non-tabular warning */}
+          {dataset?.is_tabular === false && dataset?.parse_error && (
             <p className="inline-warn" role="note">
               {dataset.parse_error}
             </p>

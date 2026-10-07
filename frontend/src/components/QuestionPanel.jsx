@@ -60,7 +60,7 @@ export default function QuestionPanel({
 
     try {
       const res = await axios.post("/api/analyze", form);
-      const result = res.data;
+      const result = { ...res.data, question: q };
       onResult(result);
 
       // Add to history
