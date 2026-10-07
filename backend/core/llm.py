@@ -61,6 +61,7 @@ def _build_prompt(
     df: pd.DataFrame,
     filename: str,
     context_history: list | None = None,
+    target_currency: str | None = None,
 ) -> str:
     """Build the analysis-code prompt."""
     col_info = []
@@ -90,9 +91,34 @@ def _build_prompt(
                 + "\n"
             )
 
+    currency_instruction = ""
+    if target_currency:
+        tc = target_currency.upper()
+        if tc == "INR":
+            currency_instruction = (
+                "\n\nCRITICAL CURRENCY CONVERSION RULE:\n"
+                "The user chose to CONVERT ALL VALUES TO INR.\n"
+                "Use fixed rate USD_TO_INR = 83.50.\n"
+                "You MUST include `USD_TO_INR = 83.50` in your code.\n"
+                "Convert USD values to INR (row['Amount'] * 83.50), keep INR values as is.\n"
+                "Calculate result and assign a string to `result` formatted as: "
+                "\"Result converted to INR (Exchange rate: 1 USD = ₹83.50)\" or including the sum.\n"
+            )
+        elif tc == "USD":
+            currency_instruction = (
+                "\n\nCRITICAL CURRENCY CONVERSION RULE:\n"
+                "The user chose to CONVERT ALL VALUES TO USD.\n"
+                "Use fixed rate USD_TO_INR = 83.50.\n"
+                "You MUST include `USD_TO_INR = 83.50` in your code.\n"
+                "Convert INR values to USD (row['Amount'] / 83.50), keep USD values as is.\n"
+                "Calculate result and assign a string to `result` formatted as: "
+                "\"Result converted to USD (Exchange rate: 1 USD = ₹83.50)\" or including the sum.\n"
+            )
+
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"Dataset description:\n{data_description}"
+        f"{currency_instruction}"
         f"{history_section}\n\n"
         f"Question: {question}\n\n"
         "Write Python code to answer this question. Assign the answer to `result`."
@@ -241,6 +267,7 @@ async def _groq_generate_code(
     df: pd.DataFrame,
     filename: str,
     context_history: list | None = None,
+    target_currency: str | None = None,
 ) -> str:
     """Generate analysis code via Groq."""
     prompt = _build_prompt(
@@ -248,6 +275,7 @@ async def _groq_generate_code(
         df=df,
         filename=filename,
         context_history=context_history,
+        target_currency=target_currency,
     )
     client = _get_groq_client()
 
@@ -343,6 +371,7 @@ async def _gemini_generate_code(
     df: pd.DataFrame,
     filename: str,
     context_history: list | None = None,
+    target_currency: str | None = None,
 ) -> str:
     """Generate analysis code via Gemini (legacy path)."""
     from google import genai as google_genai
@@ -355,6 +384,7 @@ async def _gemini_generate_code(
         df=df,
         filename=filename,
         context_history=context_history,
+        target_currency=target_currency,
     )
     config = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
 
@@ -403,6 +433,7 @@ async def generate_analysis_code(
     df: pd.DataFrame,
     filename: str,
     context_history: list | None = None,
+    target_currency: str | None = None,
 ) -> str:
     """
     Generate Python/pandas code to answer *question* against *df*.
@@ -413,8 +444,8 @@ async def generate_analysis_code(
     """
     logger.info("generate_analysis_code provider=%s", LLM_PROVIDER)
     if LLM_PROVIDER == "gemini":
-        return await _gemini_generate_code(question, df, filename, context_history)
-    return await _groq_generate_code(question, df, filename, context_history)
+        return await _gemini_generate_code(question, df, filename, context_history, target_currency)
+    return await _groq_generate_code(question, df, filename, context_history, target_currency)
 
 
 async def generate_question_suggestions(df: pd.DataFrame, filename: str) -> list[str]:

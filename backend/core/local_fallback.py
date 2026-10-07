@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +314,12 @@ _HANDLERS: list[Handler] = [
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def run_local_fallback(question: str, df: pd.DataFrame) -> FallbackResult | None:
+def run_local_fallback(
+    question: str,
+    df: pd.DataFrame,
+    dfs: dict[str, pd.DataFrame] | None = None,
+    target_currency: str | None = None,
+) -> FallbackResult | None:
     """
     Attempt to answer *question* using deterministic pandas operations.
 
@@ -327,6 +333,37 @@ def run_local_fallback(question: str, df: pd.DataFrame) -> FallbackResult | None
     if not q_lower or df is None or df.empty:
         logger.info("local_fallback: refusing empty question or empty dataframe")
         return None
+
+    if target_currency and target_currency.upper() in ["INR", "USD"]:
+        tc = target_currency.upper()
+        USD_TO_INR = 83.50
+        curr_cols = [c for c in df.columns if any(k in c.lower() for k in ["currency", "curr", "ccy"])]
+        num_cols = _numeric_cols(df)
+        if curr_cols and num_cols:
+            curr_col = curr_cols[0]
+            val_col = _find_column(q_lower, num_cols) or num_cols[0]
+            if tc == "INR":
+                code = (
+                    f"USD_TO_INR = 83.50\n\n"
+                    f"df['Amount_INR'] = np.where(df['{curr_col}'].astype(str).str.strip().str.upper() == 'USD', df['{val_col}'] * USD_TO_INR, df['{val_col}'])\n\n"
+                    f"result = f\"Total {val_col}: ₹{{df['Amount_INR'].sum():,.2f}} (Converted using 1 USD = ₹83.50)\""
+                )
+                df_copy = df.copy()
+                df_copy['Amount_INR'] = np.where(df_copy[curr_col].astype(str).str.strip().str.upper() == 'USD', df_copy[val_col] * USD_TO_INR, df_copy[val_col])
+                total = df_copy['Amount_INR'].sum()
+                ans = f"Total {val_col}: ₹{total:,.2f} (Converted using 1 USD = ₹83.50)"
+                return FallbackResult(answer=ans, generated_code=code, matched_handler="currency_conversion")
+            else:
+                code = (
+                    f"USD_TO_INR = 83.50\n\n"
+                    f"df['Amount_USD'] = np.where(df['{curr_col}'].astype(str).str.strip().str.upper() == 'INR', df['{val_col}'] / USD_TO_INR, df['{val_col}'])\n\n"
+                    f"result = f\"Total {val_col}: ${{df['Amount_USD'].sum():,.2f}} (Converted using 1 USD = ₹83.50)\""
+                )
+                df_copy = df.copy()
+                df_copy['Amount_USD'] = np.where(df_copy[curr_col].astype(str).str.strip().str.upper() == 'INR', df_copy[val_col] / USD_TO_INR, df_copy[val_col])
+                total = df_copy['Amount_USD'].sum()
+                ans = f"Total {val_col}: ${total:,.2f} (Converted using 1 USD = ₹83.50)"
+                return FallbackResult(answer=ans, generated_code=code, matched_handler="currency_conversion")
 
     if _quoted_unknown_column(q_lower, df):
         logger.info(

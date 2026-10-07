@@ -59,7 +59,7 @@ export function AnalyzingResult() {
 }
 
 /* ── Single Result Item Component ─────────────────────────────── */
-function ResultItem({ result, settings, isLast, onFollowUp }) {
+function ResultItem({ result, settings, isLast, onFollowUp, onConvertCurrency }) {
   const [codeOpen, setCodeOpen]         = useState(true);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [proofOpen, setProofOpen]       = useState(false);
@@ -124,6 +124,42 @@ function ResultItem({ result, settings, isLast, onFollowUp }) {
             <p className="answer-text refused">{result.verification_detail}</p>
           )}
         </div>
+
+        {/* ── Currency Conversion UI ── */}
+        {result.status === "refused" && (result.currency_conversion_options?.available || (result.verification_detail && result.verification_detail.includes("INR") && result.verification_detail.includes("USD"))) && (
+          <div className="currency-conversion-card" style={{ marginTop: "16px", padding: "16px", background: "var(--bg-secondary, #1e293b)", borderRadius: "8px", border: "1px solid var(--border-color, #334155)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#f59e0b", fontWeight: 600, marginBottom: "8px" }}>
+              <span style={{ fontSize: "1.2rem" }}>⚠️</span> Currency Conversion Required
+            </div>
+            <p style={{ margin: "0 0 16px 0", color: "#94a3b8", fontSize: "0.95rem" }}>
+              "Your data contains INR and USD. They cannot be safely combined without conversion."
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div style={{ border: "1px solid var(--border-color, #334155)", borderRadius: "8px", padding: "14px", background: "var(--bg-card, #0f172a)" }}>
+                <h4 style={{ margin: "0 0 6px 0", fontSize: "1rem" }}>Convert to INR</h4>
+                <p style={{ fontSize: "0.85rem", color: "#94a3b8", margin: "0 0 12px 0" }}>1 USD = ₹83.50</p>
+                <button
+                  className="btn-primary"
+                  style={{ width: "100%", padding: "8px 12px", fontSize: "0.9rem" }}
+                  onClick={() => onConvertCurrency && onConvertCurrency("INR", result.question)}
+                >
+                  Convert &amp; Calculate
+                </button>
+              </div>
+              <div style={{ border: "1px solid var(--border-color, #334155)", borderRadius: "8px", padding: "14px", background: "var(--bg-card, #0f172a)" }}>
+                <h4 style={{ margin: "0 0 6px 0", fontSize: "1rem" }}>Convert to USD</h4>
+                <p style={{ fontSize: "0.85rem", color: "#94a3b8", margin: "0 0 12px 0" }}>1 USD = ₹83.50</p>
+                <button
+                  className="btn-primary"
+                  style={{ width: "100%", padding: "8px 12px", fontSize: "0.9rem" }}
+                  onClick={() => onConvertCurrency && onConvertCurrency("USD", result.question)}
+                >
+                  Convert &amp; Calculate
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Warnings ── */}
         {result.warnings?.length > 0 && (
@@ -282,7 +318,7 @@ function ResultItem({ result, settings, isLast, onFollowUp }) {
 }
 
 /* ── Main result container ─────────────────────────────────────── */
-export default function ResultPanel({ result, results, settings, onFollowUp }) {
+export default function ResultPanel({ result, results, settings, onFollowUp, onConvertCurrency }) {
   const endRef = useRef(null);
 
   const resultList = results && results.length > 0
@@ -308,6 +344,7 @@ export default function ResultPanel({ result, results, settings, onFollowUp }) {
           settings={settings}
           isLast={index === resultList.length - 1}
           onFollowUp={onFollowUp}
+          onConvertCurrency={onConvertCurrency}
         />
       ))}
       <div ref={endRef} />

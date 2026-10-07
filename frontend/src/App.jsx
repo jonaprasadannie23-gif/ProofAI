@@ -44,7 +44,7 @@ export default function App() {
 
   // ── Handlers ──────────────────────────────────────────────────
 
-  const handleAnalyze = async (question, contextHistory) => {
+  const handleAnalyze = async (question, contextHistory, targetCurrency = null) => {
     if (!dataset || !dataset.fileObject) {
       throw new Error("No file uploaded");
     }
@@ -55,6 +55,16 @@ export default function App() {
       const formData = new FormData();
       formData.append("question", question);
       formData.append("file", dataset.fileObject);
+      if (files && files.length > 0) {
+        files.forEach((f) => {
+          if (f.fileObject) {
+            formData.append("files", f.fileObject);
+          }
+        });
+      }
+      if (targetCurrency) {
+        formData.append("target_currency", targetCurrency);
+      }
       formData.append("context_history", JSON.stringify(contextHistory || []));
 
       const response = await fetch("http://localhost:8000/api/analyze", {
@@ -67,7 +77,8 @@ export default function App() {
       }
 
       const result = await response.json();
-      
+      result.question = question;
+
       // Add to history
       handleAddToHistory({
         question,

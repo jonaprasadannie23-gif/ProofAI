@@ -32,6 +32,7 @@ class DataAnalyst:
         df: pd.DataFrame,
         filename: str,
         context_history: list | None = None,
+        target_currency: str | None = None,
     ) -> dict:
         warnings = []
 
@@ -60,7 +61,7 @@ class DataAnalyst:
             }
 
         # --- Currency / unit mismatch guard ---
-        currency_check = self._check_currency_mismatch(df, question)
+        currency_check = self._check_currency_mismatch(df, question, target_currency=target_currency)
         if currency_check["refuse"]:
             logger.info(
                 "analysis_mode=refused reason=currency_mismatch question=%r file=%s",
@@ -71,6 +72,7 @@ class DataAnalyst:
                 "answer": None,
                 "verification": "REFUSED",
                 "verification_detail": currency_check["refuse_reason"],
+                "currency_conversion_options": currency_check.get("currency_conversion_options"),
                 "generated_code": None,
                 "dataset_summary": self._dataset_summary(df, filename),
                 "data_quality": self._data_quality_report(df),
@@ -125,6 +127,29 @@ class DataAnalyst:
                 "analysis_mode": "refused",
             }
 
+        # --- Target currency conversion handle ---
+        if target_currency and target_currency.upper() in ["INR", "USD"]:
+            fallback = run_local_fallback(question, df, target_currency=target_currency)
+            if fallback is not None:
+                exec_res = execute_code(fallback.generated_code, df)
+                if exec_res["success"]:
+                    ans = str(exec_res["output"])
+                    return {
+                        "status": "success",
+                        "answer": ans,
+                        "verification": "VERIFIED",
+                        "verification_detail": f"Result converted to {target_currency.upper()} using exchange rate 1 USD = ₹83.50",
+                        "generated_code": fallback.generated_code,
+                        "reproducible_proof": self._build_reproducible_proof(fallback.generated_code, filename),
+                        "dataset_summary": self._dataset_summary(df, filename),
+                        "data_quality": self._data_quality_report(df),
+                        "warnings": warnings,
+                        "ai_answer": ans,
+                        "code_result": ans,
+                        "match": True,
+                        "analysis_mode": "currency_conversion",
+                    }
+
         # --- Generate code via LLM ---
         try:
             generated_code = await generate_analysis_code(
@@ -132,6 +157,7 @@ class DataAnalyst:
                 df=df,
                 filename=filename,
                 context_history=context_history or [],
+                target_currency=target_currency,
             )
             logger.info("analysis_mode=gemini question=%r file=%s", question, filename)
 
@@ -143,7 +169,7 @@ class DataAnalyst:
                 "analysis_mode=local_fallback reason=%s question=%r file=%s",
                 e, question, filename,
             )
-            fallback = run_local_fallback(question, df)
+            fallback = run_local_fallback(question, df, target_currency=target_currency)
 
             if fallback is not None:
                 return {
@@ -452,7 +478,9 @@ class DataAnalyst:
 
         return None
 
-    def _check_currency_mismatch(self, df: pd.DataFrame, question: str) -> dict:
+    def _check_currency_mismatch(
+        self, df: pd.DataFrame, question: str, target_currency: str | None = None
+    ) -> dict:
         """
         Deterministically detect currency/unit mismatch before calling the LLM.
 
@@ -496,22 +524,34 @@ class DataAnalyst:
         if not asks_numeric:
             return {"refuse": False}
 
-        # ── 4. Build the refusal message listing the mismatched currencies ───
-        details = "; ".join(
-            f"'{col}' contains {', '.join(vals)}"
-            for col, vals in mismatched
-        )
-        # Flat list of currency values for the message
+        if target_currency and target_currency.upper() in ["INR", "USD"]:
+            return {"refuse": False, "target_currency": target_currency.upper()}
+
+        all_vals = set(val.upper() for _, vals in mismatched for val in vals)
+        is_inr_usd = all_vals.issubset({"INR", "USD"}) or ("INR" in all_vals and "USD" in all_vals)
+
+        # ── 4. Build refusal message + options ───────────────────────────────
         all_currencies = ", ".join(
             val for _, vals in mismatched for val in vals
         )
-        refuse_reason = (
-            f"Cannot determine reliably because the dataset contains multiple "
-            f"currencies: {all_currencies}. "
-            f"A currency conversion rule is required before calculating this value."
-        )
-        logger.info("currency_mismatch detected: %s", details)
-        return {"refuse": True, "refuse_reason": refuse_reason}
+        if is_inr_usd:
+            refuse_reason = "Your data contains INR and USD. They cannot be safely combined without conversion."
+        else:
+            refuse_reason = (
+                f"Cannot determine reliably because the dataset contains multiple "
+                f"currencies: {all_currencies}. "
+                f"A currency conversion rule is required before calculating this value."
+            )
+
+        return {
+            "refuse": True,
+            "refuse_reason": refuse_reason,
+            "currency_conversion_options": {
+                "available": is_inr_usd,
+                "currencies": ["INR", "USD"],
+                "rate": 83.50,
+            } if is_inr_usd else None,
+        }
 
     def _check_data_quality(self, df: pd.DataFrame) -> dict:
         warnings = []

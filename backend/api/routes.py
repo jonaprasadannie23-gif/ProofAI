@@ -64,10 +64,12 @@ async def analyze(
     question: str = Form(...),
     file: UploadFile = File(...),
     context_history: str = Form(default="[]"),
+    target_currency: str | None = Form(default=None),
 ):
     """
     Analyze the uploaded dataset with a natural-language question.
     context_history: JSON-encoded list of {question, answer} dicts for follow-up support.
+    target_currency: Optional target currency ("INR" or "USD") for interactive currency conversion.
     """
     file_type = get_file_type(file.filename or "")
     if file_type is None:
@@ -118,6 +120,7 @@ async def analyze(
         df=df,
         filename=file.filename,
         context_history=history,
+        target_currency=target_currency,
     )
     return JSONResponse(content=_serialisable(result))
 

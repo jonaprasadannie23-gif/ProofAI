@@ -100,6 +100,36 @@ export default function ChatInterface({
     }
   };
 
+  const handleCurrencyConversion = async (targetCurrency, questionText) => {
+    if (!currentFile || isAnalyzing) return;
+    const q = questionText || inputValue.trim();
+    if (!q) return;
+
+    const contextHistory = messages.reduce((acc, msg, idx, arr) => {
+      if (msg.role === 'user' && arr[idx + 1]?.role === 'assistant') {
+        acc.push({
+          question: msg.content,
+          answer: arr[idx + 1].content,
+        });
+      }
+      return acc;
+    }, []);
+
+    try {
+      const result = await onAnalyze(q, contextHistory, targetCurrency);
+      const assistantMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: result.answer || result.verification_detail || 'Unable to process your question.',
+        timestamp: new Date().toISOString(),
+        result: result,
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error("Currency conversion analysis failed:", error);
+    }
+  };
+
   const handleSuggestionClick = (suggestion) => {
     setInputValue(suggestion);
     inputRef.current?.focus();
@@ -209,7 +239,10 @@ export default function ChatInterface({
 
               {/* Full Analysis Result for assistant messages */}
               {message.role === 'assistant' && message.result && (
-                <AnalysisResult result={message.result} />
+                <AnalysisResult
+                  result={message.result}
+                  onConvertCurrency={(currency) => handleCurrencyConversion(currency, message.result?.question)}
+                />
               )}
             </div>
           </div>
