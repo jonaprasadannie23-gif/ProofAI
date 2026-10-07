@@ -851,19 +851,19 @@ body, #root {
 .result-stack {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
 .result-item-wrap {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
   position: relative;
 }
 
 .result-item-wrap + .result-item-wrap {
-  margin-top: 16px;
-  padding-top: 24px;
+  margin-top: 12px;
+  padding-top: 16px;
   border-top: 1px dashed var(--border);
 }
 
@@ -872,7 +872,7 @@ body, #root {
 ═══════════════════════════════════════════════════════════════ */
 /* Question section */
 .question-section {
-  padding: 18px 24px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--card-inner);
 }
@@ -883,20 +883,20 @@ body, #root {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   display: block;
 }
 
 .question-text {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 /* Answer section */
 .answer-section {
-  padding: 24px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -904,8 +904,63 @@ body, #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   gap: 12px;
+}
+
+/* Currency Conversion UI */
+.currency-conversion-card {
+  margin: 12px 18px 14px;
+  padding: 12px 14px;
+  background: var(--card-inner);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-sm);
+}
+
+.currency-warning-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.currency-warning-text {
+  margin: 0 0 10px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.currency-option-boxes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.currency-box-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 11px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+  text-align: center;
+}
+
+.currency-box-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent-hover);
+  color: #ffffff;
 }
 
 .answer-heading {

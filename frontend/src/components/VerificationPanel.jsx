@@ -52,8 +52,8 @@ export default function VerificationPanel({ result }) {
         </div>
       )}
 
-      {/* Refused explanation */}
-      {isRefused && (
+      {/* Refused explanation (only if not currency conversion warning to avoid duplicate text) */}
+      {isRefused && !result.currency_conversion_options?.available && !(result.verification_detail && result.verification_detail.includes("INR") && result.verification_detail.includes("USD")) && (
         <div className="vp-refused-box">
           <p className="vp-refused-label">Refusal reason</p>
           <p className="vp-refused-text">{result.verification_detail}</p>

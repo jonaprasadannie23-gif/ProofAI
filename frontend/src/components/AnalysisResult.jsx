@@ -57,6 +57,11 @@ export default function AnalysisResult({ result, onConvertCurrency }) {
 
   const ds = result.dataset_summary;
 
+  const isCurrencyWarning = result.status === "refused" && (
+    result.currency_conversion_options?.available ||
+    (result.verification_detail && result.verification_detail.includes("INR") && result.verification_detail.includes("USD"))
+  );
+
   return (
     <div className="analysis-result">
       {/* ── Answer section ── */}
@@ -67,46 +72,41 @@ export default function AnalysisResult({ result, onConvertCurrency }) {
             {badge.label}
           </span>
         </div>
-        <div className="result-answer-text">
-          {result.answer || result.verification_detail || "No answer available"}
-        </div>
+        {!isCurrencyWarning && (
+          <div className="result-answer-text">
+            {result.answer || result.verification_detail || "No answer available"}
+          </div>
+        )}
         {result.verification_detail && result.answer && (
           <div className="result-answer-detail">{result.verification_detail}</div>
         )}
       </div>
 
       {/* ── Currency Conversion UI ── */}
-      {result.status === "refused" && (result.currency_conversion_options?.available || (result.verification_detail && result.verification_detail.includes("INR") && result.verification_detail.includes("USD"))) && (
-        <div className="currency-conversion-card" style={{ marginTop: "12px", marginBottom: "16px", padding: "16px", background: "#1e293b", borderRadius: "8px", border: "1px solid #334155" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#f59e0b", fontWeight: 600, marginBottom: "8px" }}>
-            <span style={{ fontSize: "1.2rem" }}>⚠️</span> Currency Conversion Required
+      {isCurrencyWarning && (
+        <div className="currency-conversion-card">
+          <div className="currency-warning-header">
+            <span className="warning-icon">⚠️</span>
+            <span>Currency Conversion Required</span>
           </div>
-          <p style={{ margin: "0 0 16px 0", color: "#94a3b8", fontSize: "0.95rem" }}>
-            "Your data contains INR and USD. They cannot be safely combined without conversion."
+          <p className="currency-warning-text">
+            Your data contains INR and USD. They cannot be safely combined without conversion.
           </p>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-            <div style={{ border: "1px solid #334155", borderRadius: "8px", padding: "14px", background: "#0f172a" }}>
-              <h4 style={{ margin: "0 0 6px 0", fontSize: "1rem", color: "#f8fafc" }}>Convert to INR</h4>
-              <p style={{ fontSize: "0.85rem", color: "#94a3b8", margin: "0 0 12px 0" }}>1 USD = ₹83.50</p>
-              <button
-                className="result-copy-btn"
-                style={{ width: "100%", padding: "8px 12px", background: "#2563eb", color: "#ffffff", borderRadius: "6px", fontWeight: 600, border: "none", cursor: "pointer" }}
-                onClick={() => onConvertCurrency && onConvertCurrency("INR")}
-              >
-                Convert &amp; Calculate
-              </button>
-            </div>
-            <div style={{ border: "1px solid #334155", borderRadius: "8px", padding: "14px", background: "#0f172a" }}>
-              <h4 style={{ margin: "0 0 6px 0", fontSize: "1rem", color: "#f8fafc" }}>Convert to USD</h4>
-              <p style={{ fontSize: "0.85rem", color: "#94a3b8", margin: "0 0 12px 0" }}>1 USD = ₹83.50</p>
-              <button
-                className="result-copy-btn"
-                style={{ width: "100%", padding: "8px 12px", background: "#2563eb", color: "#ffffff", borderRadius: "6px", fontWeight: 600, border: "none", cursor: "pointer" }}
-                onClick={() => onConvertCurrency && onConvertCurrency("USD")}
-              >
-                Convert &amp; Calculate
-              </button>
-            </div>
+          <div className="currency-option-boxes">
+            <button
+              type="button"
+              className="currency-box-btn"
+              onClick={() => onConvertCurrency && onConvertCurrency("INR")}
+            >
+              Convert to INR
+            </button>
+            <button
+              type="button"
+              className="currency-box-btn"
+              onClick={() => onConvertCurrency && onConvertCurrency("USD")}
+            >
+              Convert to USD
+            </button>
           </div>
         </div>
       )}
