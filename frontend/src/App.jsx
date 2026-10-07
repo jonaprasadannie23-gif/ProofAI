@@ -2,7 +2,7 @@ import { useState } from "react";
 import Sidebar from "./components/Sidebar";
 import UploadPanel from "./components/UploadPanel";
 import DatasetPreview from "./components/DatasetPreview";
-import QuestionPanel from "./components/QuestionPanel";
+import ChatInterface from "./components/ChatInterface";
 import ResultPanel, { IdleResult, AnalyzingResult } from "./components/ResultPanel";
 import FileManager from "./components/FileManager";
 import AnalysisHistory from "./components/AnalysisHistory";
@@ -41,6 +41,45 @@ export default function App() {
   const [settings, setSettings]     = useState(DEFAULT_SETTINGS);
 
   // ── Handlers ──────────────────────────────────────────────────
+
+  const handleAnalyze = async (question, contextHistory) => {
+    if (!dataset || !dataset.fileObject) {
+      throw new Error("No file uploaded");
+    }
+
+    setAnalyzing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("question", question);
+      formData.append("file", dataset.fileObject);
+      formData.append("context_history", JSON.stringify(contextHistory || []));
+
+      const response = await fetch("http://localhost:8000/api/analyze", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      
+      // Add to history
+      handleAddToHistory({
+        question,
+        answer: result.answer,
+        filename: dataset.filename,
+        timestamp: new Date().toISOString(),
+        result,
+      });
+
+      return result;
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const handleResult = (newResult) => {
     if (!newResult) return;
@@ -193,33 +232,14 @@ export default function App() {
                 )}
               </div>
 
-              {/* Right: question */}
-              <QuestionPanel
-                dataset={dataset}
-                onResult={handleResult}
-                analyzing={analyzing}
-                setAnalyzing={setAnalyzing}
-                contextHistory={followUpContext}
-                onAddToHistory={handleAddToHistory}
-                isFollowUp={isFollowUp}
+              {/* Right: chat interface */}
+              <ChatInterface
+                currentFile={dataset}
+                onAnalyze={handleAnalyze}
+                isAnalyzing={analyzing}
+                suggestions={dataset?.suggestions || []}
               />
             </div>
-
-            {/* Results — full width below */}
-            {conversation.length === 0 && analyzing ? (
-              <AnalyzingResult />
-            ) : conversation.length > 0 ? (
-              <>
-                <ResultPanel
-                  results={conversation}
-                  settings={settings}
-                  onFollowUp={handleFollowUp}
-                />
-                {analyzing && <AnalyzingResult />}
-              </>
-            ) : (
-              <IdleResult />
-            )}
           </div>
         )}
 

@@ -289,6 +289,13 @@ def _tabular_result(df: pd.DataFrame, filename: str, file_type: str) -> dict:
             preview_rows[col].notna(), None
         )
 
+    # For full dataset viewer: send all rows (limited to reasonable size)
+    full_data_rows = df.copy()
+    for col in full_data_rows.columns:
+        full_data_rows[col] = full_data_rows[col].astype(object).where(
+            full_data_rows[col].notna(), None
+        )
+
     return {
         "filename": filename,
         "file_type": file_type,
@@ -302,4 +309,5 @@ def _tabular_result(df: pd.DataFrame, filename: str, file_type: str) -> dict:
         "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
         "missing_values": {col: int(v) for col, v in df.isnull().sum().items()},
         "preview": preview_rows.to_dict(orient="records"),
+        "full_data": full_data_rows.to_dict(orient="records"),
     }

@@ -18,7 +18,7 @@ export default function FullDatasetViewer({ dataset, onClose }) {
   if (!dataset) return null;
 
   const columns    = dataset.columns || [];
-  const rows       = dataset.preview || [];
+  const rows       = dataset.full_data || dataset.preview || [];
   const missing    = dataset.missing_values || {};
   const dtypes     = dataset.dtypes || {};
   const totalRows  = rows.length;
