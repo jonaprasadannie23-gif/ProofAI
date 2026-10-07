@@ -345,22 +345,46 @@ def run_local_fallback(
             if tc == "INR":
                 code = (
                     f"USD_TO_INR = 83.50\n\n"
-                    f"df['Amount_INR'] = np.where(df['{curr_col}'].astype(str).str.strip().str.upper() == 'USD', df['{val_col}'] * USD_TO_INR, df['{val_col}'])\n\n"
+                    f"df['{val_col}'] = pd.to_numeric(df['{val_col}'], errors='coerce')\n\n"
+                    f"def convert_to_inr(row):\n"
+                    f"    if str(row['{curr_col}']).strip().upper() == 'USD':\n"
+                    f"        return row['{val_col}'] * 83.50\n"
+                    f"    else:\n"
+                    f"        return row['{val_col}']\n\n"
+                    f"df['Amount_INR'] = df.apply(convert_to_inr, axis=1)\n\n"
                     f"result = f\"Total {val_col}: ₹{{df['Amount_INR'].sum():,.2f}} (Converted using 1 USD = ₹83.50)\""
                 )
                 df_copy = df.copy()
-                df_copy['Amount_INR'] = np.where(df_copy[curr_col].astype(str).str.strip().str.upper() == 'USD', df_copy[val_col] * USD_TO_INR, df_copy[val_col])
+                df_copy[val_col] = pd.to_numeric(df_copy[val_col], errors='coerce')
+                def convert_to_inr(row):
+                    if str(row[curr_col]).strip().upper() == 'USD':
+                        return row[val_col] * USD_TO_INR
+                    else:
+                        return row[val_col]
+                df_copy['Amount_INR'] = df_copy.apply(convert_to_inr, axis=1)
                 total = df_copy['Amount_INR'].sum()
                 ans = f"Total {val_col}: ₹{total:,.2f} (Converted using 1 USD = ₹83.50)"
                 return FallbackResult(answer=ans, generated_code=code, matched_handler="currency_conversion")
             else:
                 code = (
                     f"USD_TO_INR = 83.50\n\n"
-                    f"df['Amount_USD'] = np.where(df['{curr_col}'].astype(str).str.strip().str.upper() == 'INR', df['{val_col}'] / USD_TO_INR, df['{val_col}'])\n\n"
+                    f"df['{val_col}'] = pd.to_numeric(df['{val_col}'], errors='coerce')\n\n"
+                    f"def convert_to_usd(row):\n"
+                    f"    if str(row['{curr_col}']).strip().upper() == 'INR':\n"
+                    f"        return row['{val_col}'] / 83.50\n"
+                    f"    else:\n"
+                    f"        return row['{val_col}']\n\n"
+                    f"df['Amount_USD'] = df.apply(convert_to_usd, axis=1)\n\n"
                     f"result = f\"Total {val_col}: ${{df['Amount_USD'].sum():,.2f}} (Converted using 1 USD = ₹83.50)\""
                 )
                 df_copy = df.copy()
-                df_copy['Amount_USD'] = np.where(df_copy[curr_col].astype(str).str.strip().str.upper() == 'INR', df_copy[val_col] / USD_TO_INR, df_copy[val_col])
+                df_copy[val_col] = pd.to_numeric(df_copy[val_col], errors='coerce')
+                def convert_to_usd(row):
+                    if str(row[curr_col]).strip().upper() == 'INR':
+                        return row[val_col] / USD_TO_INR
+                    else:
+                        return row[val_col]
+                df_copy['Amount_USD'] = df_copy.apply(convert_to_usd, axis=1)
                 total = df_copy['Amount_USD'].sum()
                 ans = f"Total {val_col}: ${total:,.2f} (Converted using 1 USD = ₹83.50)"
                 return FallbackResult(answer=ans, generated_code=code, matched_handler="currency_conversion")
